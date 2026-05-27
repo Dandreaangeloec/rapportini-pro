@@ -1,0 +1,15 @@
+# Python & Streamlit
+__pycache__/
+*.pyc
+
+# Streamlit secrets (non va MAI su GitHub)
+.streamlit/secrets.toml
+
+# Credenziali Google e URL foglio (NON vanno su GitHub)
+service-account.json
+sheet_url.txt
+
+# Altro
+.env
+*.env
+.DS_Store
