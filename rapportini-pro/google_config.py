@@ -1,7 +1,9 @@
 """
 Modulo di configurazione per Google Sheets via gspread
 ======================================================
-Supporta sia file locale (service-account.json) che Streamlit Cloud Secrets.
+Supporta:
+- Streamlit Cloud Secrets (JSON intero del service account)
+- File locale service-account.json
 """
 
 import json
@@ -11,84 +13,64 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import streamlit as st
 
-# Nome del file delle credenziali locale
 CREDENTIALS_FILE = "service-account.json"
-
-# Nome del foglio di lavoro all'interno del Google Sheet
 SHEET_WORKSHEET_NAME = "Rapportini"
 
-# SCOPI necessari per Google Sheets e Google Drive
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
 ]
 
 
-def carica_credenziali():
+def get_service_account_dict():
     """
-    Carica le credenziali in 2 modi:
-    1. Streamlit secrets (per Streamlit Cloud) - usa gsheets/service_account
-    2. File service-account.json (locale)
+    Recupera il dict del service account in 2 modi:
+    1. DAI STREAMLIT CLOUD SECRETS: usa la chiave 'google_service_account_json'
+       (deve contenere TUTTO il JSON del service account)
+    2. DAL FILE LOCALE service-account.json
     """
-    # METODO 1: Streamlit secrets (Cloud)
+    # METODO 1: Streamlit Cloud Secrets - singolo JSON
     try:
-        gsheets_secrets = st.secrets.get("connections", {}).get("gsheets", {})
-        sa = gsheets_secrets.get("service_account", {})
-        if sa and isinstance(sa, dict) and sa.get("private_key"):
-            # Se la private_key ha \n letterali, li convertiamo in newline reali
-            private_key = sa["private_key"]
-            if "\\n" in private_key and not private_key.startswith("-----BEGIN"):
-                private_key = private_key.replace("\\n", "\n")
-                sa["private_key"] = private_key
-            creds = Credentials.from_service_account_info(sa, scopes=SCOPES)
-            return creds
+        json_str = st.secrets.get("google_service_account_json", "")
+        if json_str and json_str.strip():
+            sa = json.loads(json_str)
+            return sa
     except Exception:
         pass
 
-    # METODO 2: File JSON locale
+    # METODO 2: File locale
     if os.path.exists(CREDENTIALS_FILE):
         try:
-            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
-            return creds
+            with open(CREDENTIALS_FILE, "r") as f:
+                return json.load(f)
         except Exception as e:
             st.sidebar.error(f"Errore credenziali: {e}")
     return None
 
 
 def get_sheet_url():
-    """
-    Restituisce l'URL del foglio Google in 2 modi:
-    1. Streamlit secrets
-    2. File sheet_url.txt
-    """
-    # METODO 1: Streamlit secrets
+    """Recupera l'URL del foglio: da secrets (google_sheet_url) o da file sheet_url.txt"""
     try:
-        url = st.secrets.get("connections", {}).get("gsheets", {}).get("spreadsheet", "")
+        url = st.secrets.get("google_sheet_url", "")
         if url:
             return url
     except Exception:
         pass
-
-    # METODO 2: File locale
     if os.path.exists("sheet_url.txt"):
         with open("sheet_url.txt", "r") as f:
             url = f.read().strip()
             if url:
                 return url
-
     return None
 
 
 def connetti_google_sheets():
-    """
-    Tenta di connettersi a Google Sheets usando gspread.
-    Restituisce (client, foglio) se connesso, altrimenti (None, None).
-    """
     try:
-        creds = carica_credenziali()
-        if creds is None:
+        sa_dict = get_service_account_dict()
+        if sa_dict is None:
             return None, None
 
+        creds = Credentials.from_service_account_info(sa_dict, scopes=SCOPES)
         client = gspread.authorize(creds)
 
         sheet_url = get_sheet_url()
@@ -112,7 +94,6 @@ def connetti_google_sheets():
 
 
 def leggi_da_google_sheets(worksheet):
-    """Legge tutti i dati dal foglio Google e restituisce una lista di dizionari."""
     try:
         return worksheet.get_all_records()
     except Exception as e:
@@ -121,7 +102,6 @@ def leggi_da_google_sheets(worksheet):
 
 
 def scrivi_su_google_sheets(worksheet, rapportini):
-    """Sovrascrive tutto il foglio Google con i dati attuali dei rapportini."""
     try:
         if not rapportini:
             worksheet.clear()
@@ -131,7 +111,6 @@ def scrivi_su_google_sheets(worksheet, rapportini):
         df = pd.DataFrame(rapportini)
         colonne = ["data", "cliente", "cantiere", "km", "ore", "spese", "nota_spesa", "note"]
         colonne_presenti = [c for c in colonne if c in df.columns]
-
         if not colonne_presenti:
             return False
 
@@ -142,14 +121,10 @@ def scrivi_su_google_sheets(worksheet, rapportini):
         for _, row in df.iterrows():
             if all(pd.isna(v) or str(v).strip() == "" for v in row):
                 continue
-            riga = []
-            for col in colonne_presenti:
-                val = row[col]
-                riga.append("" if pd.isna(val) else str(val))
+            riga = ["" if pd.isna(row[col]) else str(row[col]) for col in colonne_presenti]
             worksheet.append_row(riga)
 
         return True
-
     except Exception as e:
         st.error(f"Errore durante la scrittura su Google Sheets: {e}")
         return False
