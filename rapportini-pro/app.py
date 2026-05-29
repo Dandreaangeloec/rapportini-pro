@@ -353,6 +353,54 @@ if menu == "Rapportini Aziendali":
         st.info("Nessun rapportino inserito. Vai su 'Nuovo Rapportino' per crearne uno.")
 
 elif menu == "Nuovo Rapportino":
+    # --- GESTIONE MODIFICA RAPPORTINO ESISTENTE ---
+    if "modifica_indice" in st.session_state and st.session_state.modifica_indice is not None:
+        idx_mod = st.session_state.modifica_indice
+        r_mod = st.session_state.rapportini[idx_mod]
+        st.title(f"✏️ Modifica Rapportino #{idx_mod + 1}")
+        lista_clienti = list(st.session_state.clienti_dict.keys())
+        
+        cliente = st.selectbox("Cliente *", lista_clienti, index=lista_clienti.index(r_mod.get("cliente", lista_clienti[0])) if r_mod.get("cliente") in lista_clienti else 0, key="mod_cliente")
+        if cliente:
+            info = st.session_state.clienti_dict.get(cliente, {})
+            if info:
+                st.info(f"Tariffario applicato: **€ {info.get('prezzo_ora', 0):.2f}/ora** e **€ {info.get('prezzo_km', 0):.2f}/km**")
+        cantiere = st.text_input("Cantiere *", value=r_mod.get("cantiere", ""), key="mod_cantiere")
+        data = st.date_input("Data *", value=datetime.strptime(r_mod.get("data", str(datetime.now().date())), "%Y-%m-%d").date(), key="mod_data")
+        col_km, col_ore = st.columns(2)
+        with col_km: km = st.number_input("Km percorsi *", min_value=0, value=int(r_mod.get("km", 0)), key="mod_km")
+        with col_ore: ore = st.number_input("Ore lavorate *", min_value=0.0, value=float(r_mod.get("ore", 0.0)), step=0.5, key="mod_ore")
+        col_spese, col_motivo = st.columns(2)
+        with col_spese: spese = st.number_input("Spese extra (€)", min_value=0.0, value=float(r_mod.get("spese", 0.0)), key="mod_spese")
+        with col_motivo: nota_spesa = st.text_input("Es: carburante", value=r_mod.get("nota_spesa", ""), placeholder="Causale spesa", key="mod_nota_spesa")
+        note = st.text_area("Note / Descrizione Intervento", value=r_mod.get("note", ""), key="mod_note")
+        st.write("Firma del cliente")
+        canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000000", background_color="#ffffff", height=150, update_streamlit=True, key="canvas_mod")
+        
+        col_save, col_cancel = st.columns(2)
+        with col_save:
+            if st.button("💾 Salva Modifiche", use_container_width=True, key="btn_salva_mod"):
+                if not cantiere:
+                    st.error("Il campo Cantiere è obbligatorio")
+                else:
+                    st.session_state.rapportini[idx_mod] = {
+                        "cliente": cliente, "cantiere": cantiere, "data": str(data),
+                        "km": int(km), "ore": float(ore), "spese": float(spese),
+                        "nota_spesa": nota_spesa, "note": note
+                    }
+                    if aggiorna_google_sheets():
+                        st.success("Rapportino modificato e database aggiornato!")
+                    else:
+                        st.info("Rapportino modificato localmente.")
+                    st.session_state.modifica_indice = None
+                    st.rerun()
+        with col_cancel:
+            if st.button("❌ Annulla", use_container_width=True, key="btn_annulla_mod"):
+                st.session_state.modifica_indice = None
+                st.rerun()
+        st.stop()
+    
+    # --- NUOVO RAPPORTINO ---
     st.title("Nuovo Rapportino")
     lista_clienti = list(st.session_state.clienti_dict.keys())
     if not lista_clienti:
