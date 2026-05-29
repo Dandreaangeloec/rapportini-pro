@@ -7,16 +7,6 @@ import os
 import base64
 from google_config import connetti_google_sheets, leggi_da_google_sheets, scrivi_su_google_sheets
 
-# Cache della connessione Google Sheets (10 minuti)
-@st.cache_resource(ttl=600)
-def get_gsheet_connection():
-    """Connessione cache: si riconnette solo ogni 10 minuti."""
-    client, worksheet = connetti_google_sheets()
-    if worksheet is not None:
-        dati = leggi_da_google_sheets(worksheet)
-        return (client, worksheet, dati)
-    return (None, None, None)
-
 # Prova a caricare FPDF in modo robusto
 try:
     from fpdf import FPDF
@@ -65,15 +55,9 @@ def get_base64_img(img_path):
         return base64.b64encode(data).decode()
     return ""
 
-# Cerca lo sfondo (prova vari nomi)
-def trova_sfondo():
-    for nome in ["Image.jpeg", "sfondo.jpeg", "sfondo.jpg", "SFONDO.jpg", "background.jpg", "SFONDO.jpeg"]:
-        if os.path.exists(nome):
-            return nome
-    return None
-
-file_sfondo = trova_sfondo()
-sfondo_base64 = get_base64_img(file_sfondo) if file_sfondo else ""
+# Cerca lo sfondo provando sia maiuscole che minuscole
+file_sfondo = "Image.jpeg"
+sfondo_base64 = get_base64_img(file_sfondo)
 
 # --- CSS GRAFICA E SFONDO ---
 css_code = """
@@ -99,7 +83,6 @@ css_code = """
 
 if sfondo_base64:
     css_code = css_code.replace("</style>", f"""
-    /* Sfondo sottile come era prima */
     .stApp::before {{
         content: "";
         position: fixed;
@@ -129,32 +112,40 @@ if "clienti_dict" not in st.session_state:
         "Verdi Impianti": {"prezzo_ora": 48.0, "prezzo_km": 0.55}
     }
 
-# --- INIZIALIZZAZIONE DATI RAPPORTINI ---
-if "rapportini" not in st.session_state:
-    st.session_state.rapportini = []
-
 # --- CONNESSIONE AL DATABASE (GOOGLE SHEETS) ---
 conn_disponibile = False
 gclient = None
 gworksheet = None
 try:
-    gclient, gworksheet, dati_letti = get_gsheet_connection()
+    gclient, gworksheet = connetti_google_sheets()
     if gworksheet is not None:
+        dati_letti = leggi_da_google_sheets(gworksheet)
         if dati_letti:
             st.session_state.rapportini = dati_letti
         conn_disponibile = True
     else:
         raise Exception("Connessione non stabilita")
 except Exception as e:
-    st.sidebar.info("ℹ️ Google Sheets non configurato.")
+    st.sidebar.info("ℹ️ Google Sheets non configurato. I dati vengono salvati solo in sessione.")
+    st.sidebar.info("Per configurare consulta il file google_config.py")
+    if "rapportini" not in st.session_state:
+        st.session_state.rapportini = [
+            {
+                "cliente": "Rossi Costruzioni",
+                "cantiere": "Cantiere Via Roma 12",
+                "data": "2026-05-16",
+                "km": 45,
+                "ore": 7.5,
+                "spese": 10.0,
+                "note": "Configura Google Sheets per salvare i dati reali."
+            }
+        ]
 
 # Inizializzazione stati per i checkbox mutualmente esclusivi
 if "chk_iva" not in st.session_state:
     st.session_state.chk_iva = False
 if "chk_rev" not in st.session_state:
     st.session_state.chk_rev = False
-if "salvato" not in st.session_state:
-    st.session_state.salvato = False
 
 MESI_DICT = {
     "Gennaio": "01", "Febbraio": "02", "Marzo": "03", "Aprile": "04",
@@ -193,16 +184,6 @@ def trova_percorso_logo():
     if os.path.exists("Image.jpeg"):
         return "Image.jpeg"
     return None
-
-# --- FUNZIONE PER AGGIORNARE GOOGLE SHEETS ---
-def aggiorna_google_sheets():
-    if conn_disponibile and gworksheet is not None:
-        try:
-            if scrivi_su_google_sheets(gworksheet, st.session_state.rapportini):
-                return True
-        except:
-            pass
-    return False
 
 # --- FUNZIONI GENERAZIONE PDF ---
 def genera_pdf(dati, mese_sel, cliente_sel, imponibile, flag_iva, perc_iva, flag_reverse):
@@ -277,78 +258,16 @@ def genera_pdf_note(rapportini_filtrati, mese_sel, cliente_sel):
         info_blocco = f" DATA: {r['data']}   |   CLIENTE: {r['cliente']}   |   CANTIERE: {r['cantiere']}"
         pdf.cell(190, 7, txt=clean_txt(info_blocco), border=1, ln=True, fill=True)
         pdf.set_font("Arial", "", 10); pdf.set_text_color(51, 65, 85); pdf.ln(2)
-        # Aggiunge anche la nota spesa (causale spese extra)
-        nota_spesa = r.get("nota_spesa", "").strip() if r.get("nota_spesa") and str(r.get("nota_spesa")) != "nan" else ""
-        if nota_spesa:
-            pdf.multi_cell(190, 5, txt=clean_txt(f"Causale spese extra: {nota_spesa}"), border=0)
-            pdf.ln(1)
         testo_nota = r["note"].strip() if "note" in r and r["note"] and str(r["note"]).strip() != "nan" else "Nessuna nota registrata."
         pdf.multi_cell(190, 5, txt=clean_txt(f"Note: {testo_nota}"), border=0)
         pdf.ln(4); pdf.set_draw_color(226, 232, 240); pdf.line(10, pdf.get_y(), 200, pdf.get_y()); pdf.ln(4)
     return bytes(pdf.output())
 
-# --- LOGO SIDEBAR (IN ALTO A SINISTRA) ---
-logo_path = trova_percorso_logo()
-logo_base64 = ""
-if logo_path:
-    logo_base64 = get_base64_img(logo_path)
-
 # --- NAVIGAZIONE INTERFACCIA ---
-if logo_base64:
-    st.sidebar.markdown(
-        f'<div style="text-align: left; margin-bottom: 5px;">'
-        f'<img src="data:image/jpeg;base64,{logo_base64}" style="width: 60px; height: auto;">'
-        f'</div>',
-        unsafe_allow_html=True
-    )
 st.sidebar.title("📋 Rapportini")
 menu = st.sidebar.radio("Navigazione", ["Rapportini Aziendali", "Nuovo Rapportino", "Report Mensili e Clienti", "Clienti"])
 
 if menu == "Rapportini Aziendali":
-    # --- GESTIONE MODIFICA RAPPORTINO (in pagina) ---
-    if "modifica_indice" in st.session_state and st.session_state.modifica_indice is not None:
-        idx_mod = st.session_state.modifica_indice
-        if idx_mod < len(st.session_state.rapportini):
-            r_mod = st.session_state.rapportini[idx_mod]
-            st.subheader(f"✏️ Modifica Rapportino #{idx_mod + 1}")
-            lista_clienti = list(st.session_state.clienti_dict.keys())
-            
-            cliente = st.selectbox("Cliente", lista_clienti, index=lista_clienti.index(r_mod.get("cliente", lista_clienti[0])) if r_mod.get("cliente") in lista_clienti else 0, key="mod_cliente")
-            if cliente:
-                info = st.session_state.clienti_dict.get(cliente, {})
-                if info:
-                    st.info(f"Tariffario: € {info.get('prezzo_ora', 0):.2f}/h, € {info.get('prezzo_km', 0):.2f}/km")
-            cantiere = st.text_input("Cantiere", value=r_mod.get("cantiere", ""), key="mod_cantiere")
-            data = st.date_input("Data", value=datetime.strptime(r_mod.get("data", str(datetime.now().date())), "%Y-%m-%d").date(), key="mod_data")
-            col_km, col_ore = st.columns(2)
-            with col_km: km = st.number_input("Km", min_value=0, value=int(r_mod.get("km", 0)), key="mod_km")
-            with col_ore: ore = st.number_input("Ore", min_value=0.0, value=float(r_mod.get("ore", 0.0)), step=0.5, key="mod_ore")
-            col_spese, col_motivo = st.columns(2)
-            with col_spese: spese = st.number_input("Spese extra (€)", min_value=0.0, value=float(r_mod.get("spese", 0.0)), key="mod_spese")
-            with col_motivo: nota_spesa = st.text_input("Causale spesa", value=r_mod.get("nota_spesa", ""), key="mod_nota_spesa")
-            note = st.text_area("Note", value=r_mod.get("note", ""), key="mod_note")
-            
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                if st.button("💾 Salva Modifiche", use_container_width=True, key="btn_salva_mod"):
-                    if not cantiere:
-                        st.error("Cantiere obbligatorio")
-                    else:
-                        st.session_state.rapportini[idx_mod] = {
-                            "cliente": cliente, "cantiere": cantiere, "data": str(data),
-                            "km": int(km), "ore": float(ore), "spese": float(spese),
-                            "nota_spesa": nota_spesa, "note": note
-                        }
-                        if aggiorna_google_sheets():
-                            st.success("Rapportino modificato e database aggiornato!")
-                        st.session_state.modifica_indice = None
-                        st.rerun()
-            with col_cancel:
-                if st.button("❌ Annulla", use_container_width=True, key="btn_annulla_mod"):
-                    st.session_state.modifica_indice = None
-                    st.rerun()
-            st.markdown("---")
-    
     st.title("Rapportini Aziendali")
     st.caption("D'Andrea Angelo E.C. - Gestione e Controllo Interventi")
     tot_rapportini = len(st.session_state.rapportini)
@@ -359,136 +278,59 @@ if menu == "Rapportini Aziendali":
     with col2: st.markdown(f'<div class="card"><span class="stat-val">🕒 {tot_ore} ore</span><br><span class="stat-lbl">Tempo Totale</span></div>', unsafe_allow_html=True)
     with col3: st.markdown(f'<div class="card"><span class="stat-val">🚀 {tot_km} km</span><br><span class="stat-lbl">Distanza Totale</span></div>', unsafe_allow_html=True)
     st.subheader("Ultimi rapportini inseriti")
-    if st.session_state.rapportini:
-        for idx, r in enumerate(reversed(st.session_state.rapportini)):
-            importo_singolo = calcola_totale_rapportino(r)
-            with st.container():
-                st.markdown(f"""
-                <div class="card">
-                    <div style="display:flex; justify-content:space-between; align-items: center;">
-                        <strong style="color: var(--text-color); font-size: 16px;">{r.get('cliente', 'Sconosciuto')}</strong>
-                        <span style="background-color:#22c55e20; color:#22c55e; font-weight:bold; padding:4px 10px; border-radius:12px; font-size:14px;">
-                            € {importo_singolo:.2f}
-                        </span>
-                    </div>
-                    <div style="color: var(--text-color); opacity: 0.7; font-size:13px; margin-top:5px;">📍 {r.get('cantiere','-')} | 📅 {r.get('data','-')}</div>
-                    <div style="margin-top:8px; font-size:13px; color: var(--text-color); opacity: 0.85;">
-                        🚗 {r.get('km', 0)} km  •  🕒 {r.get('ore', 0.0)} ore  •  🧾 Spese: € {float(r.get('spese',0.0)):.2f}
-                    </div>
-                    {f'<div style="margin-top:8px; font-size:12px; font-style:italic; background:rgba(128,128,128,0.08); padding:6px; border-radius:6px;">📝 {r["note"]}</div>' if r.get("note") and str(r["note"]) != "nan" else ""}
+    for idx, r in enumerate(reversed(st.session_state.rapportini)):
+        importo_singolo = calcola_totale_rapportino(r)
+        with st.container():
+            st.markdown(f"""
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items: center;">
+                    <strong style="color: var(--text-color); font-size: 16px;">{r.get('cliente', 'Sconosciuto')}</strong>
+                    <span style="background-color:#22c55e20; color:#22c55e; font-weight:bold; padding:4px 10px; border-radius:12px; font-size:14px;">
+                        € {importo_singolo:.2f}
+                    </span>
                 </div>
-                """, unsafe_allow_html=True)
-                # Bottoni modifica / elimina per ogni rapportino
-                indice_reale = tot_rapportini - 1 - idx
-                col_btn1, col_btn2 = st.columns([1, 1])
-                with col_btn1:
-                    if st.button(f"✏️ Modifica", key=f"edit_{idx}", use_container_width=True):
-                        st.session_state.modifica_indice = indice_reale
-                        st.rerun()
-                with col_btn2:
-                    if st.button(f"🗑️ Elimina", key=f"del_{idx}", use_container_width=True):
-                        st.session_state.rapportini.pop(indice_reale)
-                        if aggiorna_google_sheets():
-                            st.success("Rapportino eliminato e database aggiornato!")
-                        else:
-                            st.info("Rapportino eliminato dalla sessione.")
-                        st.rerun()
-    else:
-        st.info("Nessun rapportino inserito. Vai su 'Nuovo Rapportino' per crearne uno.")
+                <div style="color: var(--text-color); opacity: 0.7; font-size:13px; margin-top:5px;">📍 {r.get('cantiere','-')} | 📅 {r.get('data','-')}</div>
+                <div style="margin-top:8px; font-size:13px; color: var(--text-color); opacity: 0.85;">
+                    🚗 {r.get('km', 0)} km  •  🕒 {r.get('ore', 0.0)} ore  •  🧾 Spese: € {float(r.get('spese',0.0)):.2f}
+                </div>
+                {f'<div style="margin-top:8px; font-size:12px; font-style:italic; background:rgba(128,128,128,0.08); padding:6px; border-radius:6px;">📝 {r["note"]}</div>' if r.get("note") and str(r["note"]) != "nan" else ""}
+            </div>
+            """, unsafe_allow_html=True)
 
 elif menu == "Nuovo Rapportino":
-    # --- GESTIONE MODIFICA RAPPORTINO ESISTENTE ---
-    if "modifica_indice" in st.session_state and st.session_state.modifica_indice is not None:
-        idx_mod = st.session_state.modifica_indice
-        r_mod = st.session_state.rapportini[idx_mod]
-        st.title(f"✏️ Modifica Rapportino #{idx_mod + 1}")
-        lista_clienti = list(st.session_state.clienti_dict.keys())
-        
-        cliente = st.selectbox("Cliente *", lista_clienti, index=lista_clienti.index(r_mod.get("cliente", lista_clienti[0])) if r_mod.get("cliente") in lista_clienti else 0, key="mod_cliente")
-        if cliente:
-            info = st.session_state.clienti_dict.get(cliente, {})
-            if info:
-                st.info(f"Tariffario applicato: **€ {info.get('prezzo_ora', 0):.2f}/ora** e **€ {info.get('prezzo_km', 0):.2f}/km**")
-        cantiere = st.text_input("Cantiere *", value=r_mod.get("cantiere", ""), key="mod_cantiere")
-        data = st.date_input("Data *", value=datetime.strptime(r_mod.get("data", str(datetime.now().date())), "%Y-%m-%d").date(), key="mod_data")
-        col_km, col_ore = st.columns(2)
-        with col_km: km = st.number_input("Km percorsi *", min_value=0, value=int(r_mod.get("km", 0)), key="mod_km")
-        with col_ore: ore = st.number_input("Ore lavorate *", min_value=0.0, value=float(r_mod.get("ore", 0.0)), step=0.5, key="mod_ore")
-        col_spese, col_motivo = st.columns(2)
-        with col_spese: spese = st.number_input("Spese extra (€)", min_value=0.0, value=float(r_mod.get("spese", 0.0)), key="mod_spese")
-        with col_motivo: nota_spesa = st.text_input("Es: carburante", value=r_mod.get("nota_spesa", ""), placeholder="Causale spesa", key="mod_nota_spesa")
-        note = st.text_area("Note / Descrizione Intervento", value=r_mod.get("note", ""), key="mod_note")
-        st.write("Firma del cliente")
-        canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000000", background_color="#ffffff", height=150, update_streamlit=True, key="canvas_mod")
-        
-        col_save, col_cancel = st.columns(2)
-        with col_save:
-            if st.button("💾 Salva Modifiche", use_container_width=True, key="btn_salva_mod"):
-                if not cantiere:
-                    st.error("Il campo Cantiere è obbligatorio")
-                else:
-                    st.session_state.rapportini[idx_mod] = {
-                        "cliente": cliente, "cantiere": cantiere, "data": str(data),
-                        "km": int(km), "ore": float(ore), "spese": float(spese),
-                        "nota_spesa": nota_spesa, "note": note
-                    }
-                    if aggiorna_google_sheets():
-                        st.success("Rapportino modificato e database aggiornato!")
-                    else:
-                        st.info("Rapportino modificato localmente.")
-                    st.session_state.modifica_indice = None
-                    st.rerun()
-        with col_cancel:
-            if st.button("❌ Annulla", use_container_width=True, key="btn_annulla_mod"):
-                st.session_state.modifica_indice = None
-                st.rerun()
-        st.stop()
-    
-    # --- NUOVO RAPPORTINO ---
     st.title("Nuovo Rapportino")
     lista_clienti = list(st.session_state.clienti_dict.keys())
-    if not lista_clienti:
-        st.warning("Nessun cliente presente. Aggiungi un cliente nella sezione 'Clienti'.")
-        st.stop()
-    
-    # Resetta il flag salvato se si ricarica la pagina manualmente
-    if "salvato" not in st.session_state:
-        st.session_state.salvato = False
-    
-    if not st.session_state.salvato:
-        cliente = st.selectbox("Cliente *", ["Seleziona cliente"] + lista_clienti, key="sel_cliente")
-        if cliente != "Seleziona cliente":
-            info = st.session_state.clienti_dict[cliente]
-            st.info(f"Tariffario applicato: **€ {info['prezzo_ora']:.2f}/ora** e **€ {info['prezzo_km']:.2f}/km**")
-        cantiere = st.text_input("Cantiere *", placeholder="Nome del cantiere", key="inp_cantiere")
-        data = st.date_input("Data *", datetime.now(), key="inp_data")
-        col_km, col_ore = st.columns(2)
-        with col_km: km = st.number_input("Km percorsi *", min_value=0, value=0, key="inp_km")
-        with col_ore: ore = st.number_input("Ore lavorate *", min_value=0.0, value=0.0, step=0.5, key="inp_ore")   
-        col_spese, col_motivo = st.columns(2)
-        with col_spese: spese = st.number_input("Spese extra (€)", min_value=0.0, value=0.0, key="inp_spese")
-        with col_motivo: nota_spesa = st.text_input("Es: carburante", placeholder="Causale spesa", key="inp_nota_spesa")
-        note = st.text_area("Note / Descrizione Intervento", placeholder="Inserisci qui i dettagli dei lavori svolti...", key="inp_note")
-        st.write("Firma del cliente")
-        canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000000", background_color="#ffffff", height=150, update_streamlit=True, key="canvas")
-        
-        if st.button("💾 Salva Rapportino", use_container_width=True):
-            if cliente == "Seleziona cliente" or not cantiere:
-                st.error("Per favore compila tutti i campi obbligatori (*)")
+    cliente = st.selectbox("Cliente *", ["Seleziona cliente"] + lista_clienti)
+    if cliente != "Seleziona cliente":
+        info = st.session_state.clienti_dict[cliente]
+        st.info(f"Tariffario applicato: **€ {info['prezzo_ora']:.2f}/ora** e **€ {info['prezzo_km']:.2f}/km**")
+    cantiere = st.text_input("Cantiere *", placeholder="Nome del cantiere")
+    data = st.date_input("Data *", datetime.now())
+    col_km, col_ore = st.columns(2)
+    with col_km: km = st.number_input("Km percorsi *", min_value=0, value=0)
+    with col_ore: ore = st.number_input("Ore lavorate *", min_value=0.0, value=0.0, step=0.5)   
+    col_spese, col_motivo = st.columns(2)
+    with col_spese: spese = st.number_input("Spese extra (€)", min_value=0.0, value=0.0)
+    with col_motivo: nota_spesa = st.text_input("Es: carburante", placeholder="Causale spesa")
+    note = st.text_area("Note / Descrizione Intervento", placeholder="Inserisci qui i dettagli dei lavori svolti...")
+    st.write("Firma del cliente")
+    canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000000", background_color="#ffffff", height=150, update_streamlit=True, key="canvas")
+    if st.button("💾 Salva Rapportino", use_container_width=True):
+        if cliente == "Seleziona cliente" or not cantiere:
+            st.error("Per favore compila tutti i campi obbligatori (*)")
+        else:
+            nuovo = {"cliente": cliente, "cantiere": cantiere, "data": str(data), "km": int(km), "ore": float(ore), "spese": float(spese), "note": note}
+            st.session_state.rapportini.append(nuovo)
+            if conn_disponibile and gworksheet is not None:
+                try:
+                    if scrivi_su_google_sheets(gworksheet, st.session_state.rapportini):
+                        st.success("Rapportino salvato permanentemente su Google Fogli!")
+                    else:
+                        st.error("Errore durante il salvataggio su Google Sheets.")
+                except Exception as e:
+                    st.error(f"Errore durante il salvataggio sul cloud: {e}")
             else:
-                nuovo = {"cliente": cliente, "cantiere": cantiere, "data": str(data), "km": int(km), "ore": float(ore), "spese": float(spese), "nota_spesa": nota_spesa, "note": note}
-                st.session_state.rapportini.append(nuovo)
-                st.session_state.salvato = True
-                if aggiorna_google_sheets():
-                    st.success("Rapportino salvato permanentemente su Google Fogli!")
-                else:
-                    st.warning("Rapportino salvato localmente (Database Google Sheets non abilitato).")
-                st.rerun()
-    else:
-        st.success("✅ Rapportino salvato con successo!")
-        if st.button("🔄 Nuovo Rapportino", use_container_width=True):
-            st.session_state.salvato = False
-            st.rerun()
+                st.warning("Rapportino salvato localmente (Database Google Sheets non abilitato).")
 
 elif menu == "Report Mensili e Clienti":
     st.title("Generazione Report Avanzati")
@@ -538,46 +380,21 @@ elif menu == "Report Mensili e Clienti":
 
 elif menu == "Clienti":
     st.title("Gestione Clienti")
-    with st.expander("➕ Aggiungi Nuovo Cliente"):
-        nuovo_nome = st.text_input("Nome Azienda / Cliente", key="nuovo_nome_cliente")
+    with st.expander("➕ Aggiungi / Modifica Tariffario Cliente"):
+        nuovo_nome = st.text_input("Nome Azienda / Cliente")
         c_p1, c_p2 = st.columns(2)
-        with c_p1: p_ora = st.number_input("Prezzo Orario (€/h)", min_value=0.0, value=40.0, step=0.5, key="nuovo_p_ora")
-        with c_p2: p_km = st.number_input("Prezzo Chilometrico (€/km)", min_value=0.0, value=0.5, step=0.05, key="nuovo_p_km")
-        if st.button("Salva nel Listino", use_container_width=True, key="btn_salva_cliente"):
+        with c_p1: p_ora = st.number_input("Prezzo Orario (€/h)", min_value=0.0, value=40.0, step=0.5)
+        with c_p2: p_km = st.number_input("Prezzo Chilometrico (€/km)", min_value=0.0, value=0.5, step=0.05)
+        if st.button("Salva nel Listino", use_container_width=True):
             if nuovo_nome.strip():
                 st.session_state.clienti_dict[nuovo_nome.strip()] = {"prezzo_ora": p_ora, "prezzo_km": p_km}
-                st.success(f"Cliente '{nuovo_nome}' inserito con successo!")
+                st.success(f"Cliente '{nuovo_nome}' inserito o aggiornato con successo!")
                 st.rerun()
             else:
                 st.error("Inserisci un nome cliente valido.")
-    
-    with st.expander("✏️ Modifica / Elimina Cliente Esistente"):
-        if st.session_state.clienti_dict:
-            cliente_da_modificare = st.selectbox("Seleziona cliente da modificare", list(st.session_state.clienti_dict.keys()), key="sel_mod_cliente")
-            if cliente_da_modificare:
-                info_cliente = st.session_state.clienti_dict[cliente_da_modificare]
-                mod_p_ora = st.number_input("Nuovo Prezzo Orario (€/h)", min_value=0.0, value=info_cliente["prezzo_ora"], step=0.5, key="mod_p_ora")
-                mod_p_km = st.number_input("Nuovo Prezzo Chilometrico (€/km)", min_value=0.0, value=info_cliente["prezzo_km"], step=0.05, key="mod_p_km")
-                col_mod1, col_mod2 = st.columns(2)
-                with col_mod1:
-                    if st.button("💾 Salva Modifiche", use_container_width=True, key="btn_mod_cliente"):
-                        st.session_state.clienti_dict[cliente_da_modificare] = {"prezzo_ora": mod_p_ora, "prezzo_km": mod_p_km}
-                        st.success(f"Tariffe di '{cliente_da_modificare}' aggiornate!")
-                        st.rerun()
-                with col_mod2:
-                    if st.button("🗑️ Elimina Cliente", use_container_width=True, key="btn_elimina_cliente"):
-                        del st.session_state.clienti_dict[cliente_da_modificare]
-                        st.success(f"Cliente '{cliente_da_modificare}' eliminato!")
-                        st.rerun()
-        else:
-            st.info("Nessun cliente presente. Aggiungine uno sopra.")
-    
     st.write("### Elenco Tariffe Attuali")
-    if st.session_state.clienti_dict:
-        for c, info in st.session_state.clienti_dict.items():
-            st.markdown(f'<div class="card"><strong>{c}</strong><br>🕒 Oraria: € {info["prezzo_ora"]:.2f}/h | 🚗 Km: € {info["prezzo_km"]:.2f}/km</div>', unsafe_allow_html=True)
-    else:
-        st.info("Nessun cliente configurato.")
+    for c, info in st.session_state.clienti_dict.items():
+        st.markdown(f'<div class="card"><strong>{c}</strong><br>🕒 Oraria: € {info["prezzo_ora"]:.2f}/h | 🚗 Km: € {info["prezzo_km"]:.2f}/km</div>', unsafe_allow_html=True)
 
 # --- INTESTAZIONE AZIENDALE SIDEBAR ---
 st.sidebar.markdown("<br>" * 4 + "---", unsafe_allow_html=True)
