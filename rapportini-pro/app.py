@@ -305,6 +305,50 @@ st.sidebar.title("📋 Rapportini")
 menu = st.sidebar.radio("Navigazione", ["Rapportini Aziendali", "Nuovo Rapportino", "Report Mensili e Clienti", "Clienti"])
 
 if menu == "Rapportini Aziendali":
+    # --- GESTIONE MODIFICA RAPPORTINO (in pagina) ---
+    if "modifica_indice" in st.session_state and st.session_state.modifica_indice is not None:
+        idx_mod = st.session_state.modifica_indice
+        if idx_mod < len(st.session_state.rapportini):
+            r_mod = st.session_state.rapportini[idx_mod]
+            st.subheader(f"✏️ Modifica Rapportino #{idx_mod + 1}")
+            lista_clienti = list(st.session_state.clienti_dict.keys())
+            
+            cliente = st.selectbox("Cliente", lista_clienti, index=lista_clienti.index(r_mod.get("cliente", lista_clienti[0])) if r_mod.get("cliente") in lista_clienti else 0, key="mod_cliente")
+            if cliente:
+                info = st.session_state.clienti_dict.get(cliente, {})
+                if info:
+                    st.info(f"Tariffario: € {info.get('prezzo_ora', 0):.2f}/h, € {info.get('prezzo_km', 0):.2f}/km")
+            cantiere = st.text_input("Cantiere", value=r_mod.get("cantiere", ""), key="mod_cantiere")
+            data = st.date_input("Data", value=datetime.strptime(r_mod.get("data", str(datetime.now().date())), "%Y-%m-%d").date(), key="mod_data")
+            col_km, col_ore = st.columns(2)
+            with col_km: km = st.number_input("Km", min_value=0, value=int(r_mod.get("km", 0)), key="mod_km")
+            with col_ore: ore = st.number_input("Ore", min_value=0.0, value=float(r_mod.get("ore", 0.0)), step=0.5, key="mod_ore")
+            col_spese, col_motivo = st.columns(2)
+            with col_spese: spese = st.number_input("Spese extra (€)", min_value=0.0, value=float(r_mod.get("spese", 0.0)), key="mod_spese")
+            with col_motivo: nota_spesa = st.text_input("Causale spesa", value=r_mod.get("nota_spesa", ""), key="mod_nota_spesa")
+            note = st.text_area("Note", value=r_mod.get("note", ""), key="mod_note")
+            
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                if st.button("💾 Salva Modifiche", use_container_width=True, key="btn_salva_mod"):
+                    if not cantiere:
+                        st.error("Cantiere obbligatorio")
+                    else:
+                        st.session_state.rapportini[idx_mod] = {
+                            "cliente": cliente, "cantiere": cantiere, "data": str(data),
+                            "km": int(km), "ore": float(ore), "spese": float(spese),
+                            "nota_spesa": nota_spesa, "note": note
+                        }
+                        if aggiorna_google_sheets():
+                            st.success("Rapportino modificato e database aggiornato!")
+                        st.session_state.modifica_indice = None
+                        st.rerun()
+            with col_cancel:
+                if st.button("❌ Annulla", use_container_width=True, key="btn_annulla_mod"):
+                    st.session_state.modifica_indice = None
+                    st.rerun()
+            st.markdown("---")
+    
     st.title("Rapportini Aziendali")
     st.caption("D'Andrea Angelo E.C. - Gestione e Controllo Interventi")
     tot_rapportini = len(st.session_state.rapportini)
