@@ -132,24 +132,25 @@ def get_sheet_url():
 
 
 def connetti_google_sheets():
+    import traceback, binascii
     try:
         sa = get_service_account_dict()
         if sa is None:
             st.sidebar.warning("Google Sheets: credenziali non trovate")
             return None, None
         
-        # --- DIAGNOSTICA CHIAVE ---
         pk = sa.get("private_key", "")
         st.sidebar.text(
             f"DEBUG KeyID: {sa.get('private_key_id','?')[:20]}...\n"
             f"Key len: {len(pk)}\n"
-            f"Key starts: {repr(pk[:40])}\n"
-            f"Key has \\n: {'\\\\n' in pk}\n"
-            f"Key has real NL: {chr(10) in pk}"
+            f"Key hex start: {binascii.hexlify(pk[:80].encode()).decode()[:120]}\n"
+            f"Key hex end: {binascii.hexlify(pk[-80:].encode()).decode()[-120:]}\n"
+            f"Has \\n literal: {'\\\\n' in pk}\n"
+            f"Has real NL: {chr(10) in pk}"
         )
-        # --- FINE DIAGNOSTICA ---
         
-        creds = __import__("google.oauth2.service_account", fromlist=["Credentials"]).Credentials.from_service_account_info(sa, scopes=SCOPES)
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_info(sa, scopes=SCOPES)
         gc = gspread.authorize(creds)
         url = get_sheet_url()
         if url is None:
@@ -164,6 +165,7 @@ def connetti_google_sheets():
         return gc, ws
     except Exception as e:
         st.sidebar.error(f"Errore Google Sheets: {e}")
+        st.sidebar.text(traceback.format_exc())
         return None, None
 
 
