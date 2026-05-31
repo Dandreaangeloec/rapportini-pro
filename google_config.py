@@ -39,15 +39,26 @@ def _read_service_account_from_dict(d):
 
 def get_service_account_dict():
     """Cerca credenziali in ordine di priorita'."""
-    # 1) st.secrets (formato TOML nativo raccomandato)
+    # 1) st.secrets (opzioni multiple)
     try:
         if hasattr(st, "secrets"):
+            # 1a) Base64 (il piu' robusto contro problemi TOML)
+            b64 = st.secrets.get("google_service_account_b64", "")
+            if b64 and isinstance(b64, str) and b64.strip():
+                import base64
+                try:
+                    return _fix_private_key(json.loads(base64.b64decode(b64.strip())))
+                except Exception:
+                    pass
+
+            # 1b) Dict TOML nativo
             for key in ("google_service_account", "gcp_service_account"):
                 val = st.secrets.get(key, None)
                 sa = _read_service_account_from_dict(val)
                 if sa:
                     return sa
-            # se google_service_account e' una stringa JSON
+
+            # 1c) Stringa JSON
             raw = st.secrets.get("google_service_account", "")
             if isinstance(raw, str) and raw.strip():
                 try:
@@ -69,6 +80,11 @@ def get_service_account_dict():
                 import tomllib
                 with open(secrets_path, "rb") as f:
                     data = tomllib.load(f)
+                # Prova base64
+                b64 = data.get("google_service_account_b64", "")
+                if b64 and isinstance(b64, str) and b64.strip():
+                    import base64
+                    return _fix_private_key(json.loads(base64.b64decode(b64.strip())))
                 sa = _read_service_account_from_dict(data.get("google_service_account", {}))
                 if sa:
                     return sa
