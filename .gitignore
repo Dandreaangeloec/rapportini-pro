@@ -7,7 +7,12 @@ __pycache__/
 
 # Credenziali Google e URL foglio (NON vanno su GitHub)
 service-account.json
+credentials.json
 sheet_url.txt
+rapportini-app-*.json
+
+# File temporanei
+_fix.py
 
 # Altro
 .env

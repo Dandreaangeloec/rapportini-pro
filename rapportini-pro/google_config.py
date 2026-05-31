@@ -1,10 +1,9 @@
 """
 Modulo di configurazione per Google Sheets via gspread
 ======================================================
-Legge le credenziali dal file JSON locale o da variabili d'ambiente.
-Per Streamlit Cloud: funziona leggendo il file direttamente dal repo.
+Cerca credenziali e URL sempre nella stessa cartella di questo file.
+Compatibile con: locale, Streamlit Cloud, GitHub.
 """
-
 import json
 import os
 import gspread
@@ -12,15 +11,17 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import streamlit as st
 
-# Cerca il file delle credenziali con vari nomi possibili
+# Directory di questo file (garantisce path assoluti ovunque venga eseguito)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
 POSSIBLE_CREDENTIAL_FILES = [
     "service-account.json",
     "credentials.json",
     "rapportini-app-497020-c89737d42a9f.json",
+    "rapportini-app-497020-0c38d1b7d1b9.json",
 ]
 
 SHEET_WORKSHEET_NAME = "Rapportini"
-
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
@@ -28,40 +29,36 @@ SCOPES = [
 
 
 def get_service_account_dict():
-    """Cerca le credenziali in ordine: secrets Streamlit, poi file JSON locale."""
-    # METODO 1: Streamlit Cloud secrets
+    """Cerca credenziali: Streamlit secrets > file JSON in questa cartella."""
+    # 1) Streamlit Cloud secrets (per deploy su Streamlit Cloud)
     try:
-        json_str = st.secrets.get("google_service_account", "")
-        if json_str and json_str.strip():
-            return json.loads(json_str)
+        js = st.secrets.get("google_service_account", "")
+        if js and js.strip():
+            return json.loads(js)
     except Exception:
         pass
 
-    # METODO 2: Vari file JSON nella cartella
-    for filename in POSSIBLE_CREDENTIAL_FILES:
-        if os.path.exists(filename):
-            try:
-                with open(filename, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                st.sidebar.error(f"Errore leggendo {filename}: {e}")
-    
-    # METODO 3: Cerca nella sottocartella corrente
-    for filename in POSSIBLE_CREDENTIAL_FILES:
-        path = os.path.join(os.path.dirname(__file__), filename)
+    # 2) File JSON nella cartella di questo modulo
+    for fname in POSSIBLE_CREDENTIAL_FILES:
+        path = os.path.join(_HERE, fname)
         if os.path.exists(path):
-            try:
-                with open(path, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                pass
+            with open(path, "r") as f:
+                return json.load(f)
+
+    # 3) Cerca anche nella cartella superiore (root progetto)
+    parent = os.path.dirname(_HERE)
+    for fname in POSSIBLE_CREDENTIAL_FILES:
+        path = os.path.join(parent, fname)
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return json.load(f)
 
     return None
 
 
 def get_sheet_url():
-    """Cerca l'URL del foglio: secrets, file txt, o variabile d'ambiente."""
-    # METODO 1: Streamlit Cloud secrets
+    """Cerca URL foglio: Streamlit secrets > env > file locale."""
+    # 1) Streamlit Cloud secrets
     try:
         url = st.secrets.get("google_sheet_url", "")
         if url:
@@ -69,14 +66,24 @@ def get_sheet_url():
     except Exception:
         pass
 
-    # METODO 2: Variabile d'ambiente
+    # 2) Variabile d'ambiente
     url = os.environ.get("GOOGLE_SHEET_URL")
     if url:
         return url
 
-    # METODO 3: File sheet_url.txt
-    if os.path.exists("sheet_url.txt"):
-        with open("sheet_url.txt", "r") as f:
+    # 3) File nella stessa cartella di questo modulo
+    path = os.path.join(_HERE, "sheet_url.txt")
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            url = f.read().strip()
+            if url:
+                return url
+
+    # 4) File nella cartella superiore (root progetto)
+    parent = os.path.dirname(_HERE)
+    path = os.path.join(parent, "sheet_url.txt")
+    if os.path.exists(path):
+        with open(path, "r") as f:
             url = f.read().strip()
             if url:
                 return url
@@ -85,6 +92,7 @@ def get_sheet_url():
 
 
 def connetti_google_sheets():
+    """Restituisce (client, worksheet) oppure (None, None) in caso di errore."""
     try:
         sa_dict = get_service_account_dict()
         if sa_dict is None:
