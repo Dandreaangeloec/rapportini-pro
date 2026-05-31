@@ -29,29 +29,50 @@ SCOPES = [
 
 
 def _fix_private_key(sa_dict):
-    """Corregge la private_key se ha \n letterali (problema TOML con apici singoli)."""
+    """Corregge la private_key se ha \\n letterali (problema TOML apici singoli)."""
     pk = sa_dict.get("private_key", "")
     if not pk:
         return sa_dict
-    # Se la chiave contiene veri newline, è già a posto
-    if "\n" in pk:
+    if "\n" in pk:          # già veri newline
         return sa_dict
-    # Se contiene \n letterali (backslash+n), li converte in veri newline
-    if "\\n" in pk:
+    if "\\n" in pk:         # backslash+n letterali -> converti
         sa_dict["private_key"] = pk.replace("\\n", "\n")
     return sa_dict
 
 
-def get_service_account_dict():
-    """Cerca credenziali: Streamlit secrets > file JSON in questa cartella."""
-    # 1) Streamlit Cloud secrets (per deploy su Streamlit Cloud)
+def _try_parse_secret(key):
+    """Prova a estrarre un dizionario da st.secrets[key] in qualsiasi formato."""
     try:
-        js = st.secrets.get("google_service_account", "")
-        if js and js.strip():
-            sa = json.loads(js)
-            return _fix_private_key(sa)
+        val = st.secrets.get(key)
     except Exception:
-        pass
+        return None
+
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return None
+
+    # Caso 1: TOML ha parsato come dict nidificato
+    if isinstance(val, dict):
+        return _fix_private_key(dict(val))
+
+    # Caso 2: È una stringa JSON
+    if isinstance(val, str):
+        raw = val.strip()
+        # Prova a fare il parsing come JSON
+        return _fix_private_key(json.loads(raw))
+
+    return None
+
+
+def get_service_account_dict():
+    """Cerca credenziali: Streamlit secrets > file JSON locale."""
+    # 1) Streamlit Cloud secrets
+    sa = (
+        _try_parse_secret("google_service_account")
+        or _try_parse_secret("gcp_service_account")
+        or _try_parse_secret("GOOGLE_SERVICE_ACCOUNT")
+    )
+    if sa:
+        return sa
 
     # 2) File JSON nella cartella di questo modulo
     for fname in POSSIBLE_CREDENTIAL_FILES:
@@ -60,7 +81,7 @@ def get_service_account_dict():
             with open(path, "r") as f:
                 return _fix_private_key(json.load(f))
 
-    # 3) Cerca anche nella cartella superiore (root progetto)
+    # 3) Cerca anche nella cartella superiore
     parent = os.path.dirname(_HERE)
     for fname in POSSIBLE_CREDENTIAL_FILES:
         path = os.path.join(parent, fname)
@@ -76,8 +97,8 @@ def get_sheet_url():
     # 1) Streamlit Cloud secrets
     try:
         url = st.secrets.get("google_sheet_url", "")
-        if url:
-            return url
+        if url and isinstance(url, str) and url.strip():
+            return url.strip()
     except Exception:
         pass
 
@@ -94,7 +115,7 @@ def get_sheet_url():
             if url:
                 return url
 
-    # 4) File nella cartella superiore (root progetto)
+    # 4) File nella cartella superiore
     parent = os.path.dirname(_HERE)
     path = os.path.join(parent, "sheet_url.txt")
     if os.path.exists(path):
@@ -111,6 +132,12 @@ def connetti_google_sheets():
     try:
         sa_dict = get_service_account_dict()
         if sa_dict is None:
+            # Diagnostica: mostra se i secrets esistono
+            try:
+                keys = list(st.secrets.keys()) if hasattr(st.secrets, "keys") else "N/A"
+                st.sidebar.warning(f"DEBUG: Nessuna credenziale. Secrets keys: {keys}")
+            except Exception:
+                st.sidebar.warning("DEBUG: Nessuna credenziale. st.secrets non accessibile.")
             return None, None
 
         creds = Credentials.from_service_account_info(sa_dict, scopes=SCOPES)
@@ -118,6 +145,7 @@ def connetti_google_sheets():
 
         sheet_url = get_sheet_url()
         if sheet_url is None:
+            st.sidebar.warning("DEBUG: Nessun sheet_url da secrets/env/file")
             return None, None
 
         sh = client.open_by_url(sheet_url)
