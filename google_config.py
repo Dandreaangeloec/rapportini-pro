@@ -11,13 +11,18 @@ SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/a
 
 
 def _fix_private_key(sa_dict):
-    """Normalizza la private_key."""
+    """Normalizza la private_key senza alterarla troppo."""
     pk = sa_dict.get("private_key", "")
     if not pk:
         return sa_dict
-    pk = pk.strip()
+    # Rimuovi SOLO spazi iniziali/finali, non newline finali (PEM li richiede)
+    pk = pk.lstrip()
+    # Converti \n letterali in veri newline
     if "\\n" in pk and "\n" not in pk:
         pk = pk.replace("\\n", "\n")
+    # Assicura che finisca con \n (PEM standard)
+    if not pk.endswith("\n"):
+        pk += "\n"
     sa_dict["private_key"] = pk
     return sa_dict
 
