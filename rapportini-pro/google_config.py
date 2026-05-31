@@ -78,16 +78,31 @@ def get_service_account_dict():
 
 
 def get_sheet_url():
-    """Cerca URL foglio."""
+    """Cerca URL foglio: secrets > env > file locale."""
+    # 1) Chiave standalone nei secrets
     try:
         url = st.secrets.get("google_sheet_url", "")
         if url and isinstance(url, str) and url.strip():
             return url.strip()
     except Exception:
         pass
+
+    # 2) Dentro la sezione [google_service_account] (se messo dopo nel TOML)
+    try:
+        gsa = st.secrets.get("google_service_account", None)
+        if isinstance(gsa, dict):
+            url = gsa.get("google_sheet_url", "")
+            if url and isinstance(url, str) and url.strip():
+                return url.strip()
+    except Exception:
+        pass
+
+    # 3) Variabile d'ambiente
     url = os.environ.get("GOOGLE_SHEET_URL")
     if url:
         return url
+
+    # 4) File locale
     for d in (_HERE, os.path.dirname(_HERE)):
         p = os.path.join(d, "sheet_url.txt")
         if os.path.exists(p):
