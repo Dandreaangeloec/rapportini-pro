@@ -15,6 +15,7 @@ import streamlit as st
 # Cerca il file delle credenziali con vari nomi possibili
 POSSIBLE_CREDENTIAL_FILES = [
     "service-account.json",
+    "credentials.json",
     "rapportini-app-497020-c89737d42a9f.json",
 ]
 
