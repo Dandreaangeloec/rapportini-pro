@@ -1,9 +1,8 @@
 """
 Modulo di configurazione per Google Sheets via gspread
 ======================================================
-Supporta:
-- Streamlit Cloud Secrets (JSON intero del service account)
-- File locale service-account.json
+Legge le credenziali dal file JSON locale o da variabili d'ambiente.
+Per Streamlit Cloud: funziona leggendo il file direttamente dal repo.
 """
 
 import json
@@ -13,7 +12,12 @@ from google.oauth2.service_account import Credentials
 import pandas as pd
 import streamlit as st
 
-CREDENTIALS_FILE = "service-account.json"
+# Cerca il file delle credenziali con vari nomi possibili
+POSSIBLE_CREDENTIAL_FILES = [
+    "service-account.json",
+    "rapportini-app-497020-c89737d42a9f.json",
+]
+
 SHEET_WORKSHEET_NAME = "Rapportini"
 
 SCOPES = [
@@ -23,44 +27,59 @@ SCOPES = [
 
 
 def get_service_account_dict():
-    """
-    Recupera il dict del service account in 2 modi:
-    1. DAI STREAMLIT CLOUD SECRETS: usa la chiave 'google_service_account_json'
-       (deve contenere TUTTO il JSON del service account)
-    2. DAL FILE LOCALE service-account.json
-    """
-    # METODO 1: Streamlit Cloud Secrets - singolo JSON
+    """Cerca le credenziali in ordine: secrets Streamlit, poi file JSON locale."""
+    # METODO 1: Streamlit Cloud secrets
     try:
-        json_str = st.secrets.get("google_service_account_json", "")
+        json_str = st.secrets.get("google_service_account", "")
         if json_str and json_str.strip():
-            sa = json.loads(json_str)
-            return sa
+            return json.loads(json_str)
     except Exception:
         pass
 
-    # METODO 2: File locale
-    if os.path.exists(CREDENTIALS_FILE):
-        try:
-            with open(CREDENTIALS_FILE, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            st.sidebar.error(f"Errore credenziali: {e}")
+    # METODO 2: Vari file JSON nella cartella
+    for filename in POSSIBLE_CREDENTIAL_FILES:
+        if os.path.exists(filename):
+            try:
+                with open(filename, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                st.sidebar.error(f"Errore leggendo {filename}: {e}")
+    
+    # METODO 3: Cerca nella sottocartella corrente
+    for filename in POSSIBLE_CREDENTIAL_FILES:
+        path = os.path.join(os.path.dirname(__file__), filename)
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                pass
+
     return None
 
 
 def get_sheet_url():
-    """Recupera l'URL del foglio: da secrets (google_sheet_url) o da file sheet_url.txt"""
+    """Cerca l'URL del foglio: secrets, file txt, o variabile d'ambiente."""
+    # METODO 1: Streamlit Cloud secrets
     try:
         url = st.secrets.get("google_sheet_url", "")
         if url:
             return url
     except Exception:
         pass
+
+    # METODO 2: Variabile d'ambiente
+    url = os.environ.get("GOOGLE_SHEET_URL")
+    if url:
+        return url
+
+    # METODO 3: File sheet_url.txt
     if os.path.exists("sheet_url.txt"):
         with open("sheet_url.txt", "r") as f:
             url = f.read().strip()
             if url:
                 return url
+
     return None
 
 
