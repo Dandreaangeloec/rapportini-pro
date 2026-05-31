@@ -28,13 +28,28 @@ SCOPES = [
 ]
 
 
+def _fix_private_key(sa_dict):
+    """Corregge la private_key se ha \n letterali (problema TOML con apici singoli)."""
+    pk = sa_dict.get("private_key", "")
+    if not pk:
+        return sa_dict
+    # Se la chiave contiene veri newline, è già a posto
+    if "\n" in pk:
+        return sa_dict
+    # Se contiene \n letterali (backslash+n), li converte in veri newline
+    if "\\n" in pk:
+        sa_dict["private_key"] = pk.replace("\\n", "\n")
+    return sa_dict
+
+
 def get_service_account_dict():
     """Cerca credenziali: Streamlit secrets > file JSON in questa cartella."""
     # 1) Streamlit Cloud secrets (per deploy su Streamlit Cloud)
     try:
         js = st.secrets.get("google_service_account", "")
         if js and js.strip():
-            return json.loads(js)
+            sa = json.loads(js)
+            return _fix_private_key(sa)
     except Exception:
         pass
 
@@ -43,7 +58,7 @@ def get_service_account_dict():
         path = os.path.join(_HERE, fname)
         if os.path.exists(path):
             with open(path, "r") as f:
-                return json.load(f)
+                return _fix_private_key(json.load(f))
 
     # 3) Cerca anche nella cartella superiore (root progetto)
     parent = os.path.dirname(_HERE)
@@ -51,7 +66,7 @@ def get_service_account_dict():
         path = os.path.join(parent, fname)
         if os.path.exists(path):
             with open(path, "r") as f:
-                return json.load(f)
+                return _fix_private_key(json.load(f))
 
     return None
 
