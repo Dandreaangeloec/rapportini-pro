@@ -397,41 +397,65 @@ if logo_sidebar:
 menu = st.sidebar.radio("Navigazione", ["Rapportini Aziendali", "Nuovo Rapportino", "Report Mensili e Clienti", "Clienti"])
 
 # --- AUTO-CHIUSURA SIDEBAR DOPO SELEZIONE MENU (mobile) ---
-if "prev_menu" not in st.session_state:
-    st.session_state.prev_menu = menu
-elif st.session_state.prev_menu != menu:
-    st.session_state.prev_menu = menu
-    st.session_state.sidebar_should_close = True
-
-if st.session_state.get("sidebar_should_close"):
-    st.session_state.sidebar_should_close = False
-    # Usa components.html per eseguire JS nel contesto del parent document
-    close_sidebar_js = """
-    <script>
-    (function(){
-      var iframe = window.frameElement;
-      var doc = iframe ? (iframe.ownerDocument || iframe.parentNode) : document;
-      try {
-        var btn = parent.document.querySelector('button[aria-label="Close sidebar"]') ||
-                  parent.document.querySelector('[data-testid="stSidebarCollapseButton"]') ||
-                  parent.document.querySelector('button[kind="headerNoPadding"]');
-        if(btn) {
-          btn.click();
-        } else {
-          // fallback: cerca tutti i bottoni header
-          var btns = parent.document.querySelectorAll('button');
-          for(var i=0; i<btns.length; i++) {
-            if(btns[i].innerText === 'Close sidebar' || btns[i].getAttribute('aria-label') === 'Close sidebar') {
-              btns[i].click();
-              break;
+# Inietta CSS e JS permanentemente per chiudere la sidebar su mobile dopo selezione
+st.markdown("""
+<style>
+/* Nasconde la sidebar su mobile quando ha la classe sidebar-closed */
+@media (max-width: 768px) {
+    body.sidebar-closed section[data-testid="stSidebar"],
+    body.sidebar-closed [data-testid="stSidebar"] {
+        transform: translateX(-100%) !important;
+        display: none !important;
+        visibility: hidden !important;
+    }
+}
+</style>
+<script>
+(function(){
+    // Osserva i cambiamenti del menu nella sidebar
+    var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            if (mutation.type === 'childList' || mutation.type === 'characterData') {
+                // Controlla se un radio button è stato selezionato
+                var radios = document.querySelectorAll('input[type="radio"]');
+                radios.forEach(function(radio) {
+                    if (radio.checked) {
+                        // Aggiungi la classe al body per nascondere la sidebar
+                        document.body.classList.add('sidebar-closed');
+                        // Rimuovi la classe dopo 2 secondi per permettere di riaprirla
+                        setTimeout(function() {
+                            document.body.classList.remove('sidebar-closed');
+                        }, 2000);
+                    }
+                });
             }
-          }
+        });
+    });
+    
+    // Osserva il documento per cambiamenti
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+    
+    // Fallback: chiudi la sidebar dopo 1 secondo dal caricamento della pagina
+    setTimeout(function() {
+        var radios = document.querySelectorAll('input[type="radio"]');
+        var anyChecked = false;
+        radios.forEach(function(radio) {
+            if (radio.checked) anyChecked = true;
+        });
+        if (anyChecked) {
+            document.body.classList.add('sidebar-closed');
+            setTimeout(function() {
+                document.body.classList.remove('sidebar-closed');
+            }, 2000);
         }
-      } catch(e){ console.warn('sidebar close error:', e); }
-    })();
-    </script>
-    """
-    components.html(close_sidebar_js, height=0, width=0)
+    }, 1000);
+})();
+</script>
+""", unsafe_allow_html=True)
 
 if menu == "Rapportini Aziendali":
     st.title("Rapportini Aziendali")
