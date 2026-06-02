@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime
 from streamlit_drawable_canvas import st_canvas
@@ -396,7 +397,6 @@ if logo_sidebar:
 menu = st.sidebar.radio("Navigazione", ["Rapportini Aziendali", "Nuovo Rapportino", "Report Mensili e Clienti", "Clienti"])
 
 # --- AUTO-CHIUSURA SIDEBAR DOPO SELEZIONE MENU (mobile) ---
-# Traccia il menu precedente per rilevare il cambio
 if "prev_menu" not in st.session_state:
     st.session_state.prev_menu = menu
 elif st.session_state.prev_menu != menu:
@@ -405,24 +405,33 @@ elif st.session_state.prev_menu != menu:
 
 if st.session_state.get("sidebar_should_close"):
     st.session_state.sidebar_should_close = False
-    st.markdown("""
+    # Usa components.html per eseguire JS nel contesto del parent document
+    close_sidebar_js = """
     <script>
     (function(){
-      var doc = parent.document || document;
-      function tryClose(){
-        var btn = doc.querySelector('button[aria-label="Close sidebar"]') ||
-                  doc.querySelector('[data-testid="stSidebarCollapseButton"]');
-        if(btn){ btn.click(); return true; }
-        return false;
-      }
-      if(!tryClose()){
-        setTimeout(tryClose, 300);
-        setTimeout(tryClose, 800);
-        setTimeout(tryClose, 1500);
-      }
+      var iframe = window.frameElement;
+      var doc = iframe ? (iframe.ownerDocument || iframe.parentNode) : document;
+      try {
+        var btn = parent.document.querySelector('button[aria-label="Close sidebar"]') ||
+                  parent.document.querySelector('[data-testid="stSidebarCollapseButton"]') ||
+                  parent.document.querySelector('button[kind="headerNoPadding"]');
+        if(btn) {
+          btn.click();
+        } else {
+          // fallback: cerca tutti i bottoni header
+          var btns = parent.document.querySelectorAll('button');
+          for(var i=0; i<btns.length; i++) {
+            if(btns[i].innerText === 'Close sidebar' || btns[i].getAttribute('aria-label') === 'Close sidebar') {
+              btns[i].click();
+              break;
+            }
+          }
+        }
+      } catch(e){ console.warn('sidebar close error:', e); }
     })();
     </script>
-    """, unsafe_allow_html=True)
+    """
+    components.html(close_sidebar_js, height=0, width=0)
 
 if menu == "Rapportini Aziendali":
     st.title("Rapportini Aziendali")
