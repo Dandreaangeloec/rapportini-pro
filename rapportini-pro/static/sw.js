@@ -1,10 +1,10 @@
 // Service Worker per Rapportini Pro
-const CACHE_NAME = "rapportini-pro-v2";
+const CACHE_NAME = "rapportini-pro-v3";
 const urlsToCache = [
   "./",
-  "./manifest.json",
-  "./logo-192.png",
-  "./logo-512.png"
+  "./static/manifest.json",
+  "./static/logo-192.png",
+  "./static/logo-512.png"
 ];
 
 // Installazione: mette in cache le risorse statiche
