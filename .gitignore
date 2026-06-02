@@ -20,3 +20,10 @@ rapportini-app-*.json
 # Credenziali Google
 credentials.json
 sheet_url.txt
+
+git
+secrets_example.txt
+secrets.txt
+sheet_url.txt
+*.json
+
