@@ -1,5 +1,5 @@
 // Service Worker per Rapportini Pro
-const CACHE_NAME = "rapportini-pro-v1";
+const CACHE_NAME = "rapportini-pro-v2";
 const urlsToCache = [
   "./",
   "./manifest.json",
