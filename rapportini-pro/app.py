@@ -395,31 +395,34 @@ if logo_sidebar:
 
 menu = st.sidebar.radio("Navigazione", ["Rapportini Aziendali", "Nuovo Rapportino", "Report Mensili e Clienti", "Clienti"])
 
-# --- AUTO-CHIUSURA SIDEBAR DOPO SELEZIONE (su mobile) ---
-st.markdown("""
-<script>
-(function(){
-  function closeSidebar(){
-    var doc = parent.document || document;
-    var btn = doc.querySelector('button[aria-label="Close sidebar"]') ||
-              doc.querySelector('[data-testid="stSidebarCollapseButton"]') ||
-              doc.querySelector('button[kind="headerNoPadding"]');
-    if(btn){
-      setTimeout(function(){ btn.click(); }, 1000);
-    } else {
-      var toggle = doc.querySelector('button[data-testid="stSidebarCollapseButton"]');
-      if(toggle) setTimeout(function(){ toggle.click(); }, 1000);
-    }
-  }
-  document.addEventListener('click', function(e){
-    var radio = e.target.closest('[role="radiogroup"]') ||
-                e.target.closest('[data-testid="stSidebarNav"]') ||
-                e.target.closest('.stRadio');
-    if(radio){ closeSidebar(); }
-  });
-})();
-</script>
-""", unsafe_allow_html=True)
+# --- AUTO-CHIUSURA SIDEBAR DOPO SELEZIONE MENU (mobile) ---
+# Traccia il menu precedente per rilevare il cambio
+if "prev_menu" not in st.session_state:
+    st.session_state.prev_menu = menu
+elif st.session_state.prev_menu != menu:
+    st.session_state.prev_menu = menu
+    st.session_state.sidebar_should_close = True
+
+if st.session_state.get("sidebar_should_close"):
+    st.session_state.sidebar_should_close = False
+    st.markdown("""
+    <script>
+    (function(){
+      var doc = parent.document || document;
+      function tryClose(){
+        var btn = doc.querySelector('button[aria-label="Close sidebar"]') ||
+                  doc.querySelector('[data-testid="stSidebarCollapseButton"]');
+        if(btn){ btn.click(); return true; }
+        return false;
+      }
+      if(!tryClose()){
+        setTimeout(tryClose, 300);
+        setTimeout(tryClose, 800);
+        setTimeout(tryClose, 1500);
+      }
+    })();
+    </script>
+    """, unsafe_allow_html=True)
 
 if menu == "Rapportini Aziendali":
     st.title("Rapportini Aziendali")
