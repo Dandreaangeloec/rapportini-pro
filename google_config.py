@@ -1,194 +1,250 @@
 """
 Modulo di configurazione per Google Sheets via gspread
 ======================================================
-Passi per la configurazione:
-1. Vai su https://console.cloud.google.com/
-2. Crea un nuovo progetto (o selezionane uno esistente)
-3. Abilita Google Sheets API
-4. Vai su "Credenziali" -> "Crea credenziali" -> "Service Account"
-5. Assegna un nome, clicca "Crea e continua"
-6. Nel ruolo, scegli "Editor" (o "Proprietario")
-7. Clicca "Fine"
-8. Nella lista dei service account, clicca sull'email appena creata
-9. Vai su "Chiavi" -> "Aggiungi chiave" -> "Crea nuova chiave" -> JSON
-10. Salva il file come "service-account.json" nella cartella del progetto
-11. Apri il file JSON, copia il valore di "client_email"
-12. Condividi il tuo Google Sheet con quella email (come editor)
-13. Scrivi l'URL del foglio qui sotto
+Cerca credenziali e URL: file JSON locale > secrets.toml > st.secrets.
 """
+import json, os, gspread, pandas as pd, streamlit as st
 
-import json
-import os
-import gspread
-from google.oauth2.service_account import Credentials
-import pandas as pd
-import streamlit as st
-
-# Nome del file delle credenziali (da creare seguendo le istruzioni sopra)
-CREDENTIALS_FILE = "service-account.json"
-
-# Nome del foglio di lavoro all'interno del Google Sheet
-# (cambialo se il tuo foglio si chiama diversamente)
+_HERE = os.path.dirname(os.path.abspath(__file__))
 SHEET_WORKSHEET_NAME = "Rapportini"
+SHEET_WORKSHEET_CLIENTI = "Clienti"  # <-- NUOVO
+SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# SCOPI necessari per Google Sheets e Google Drive
-SCOPES = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
+# URL del foglio Google Sheets (letto da sheet_url.txt o hardcoded per Streamlit Cloud)
+_FALLBACK_SHEET_URL = "https://docs.google.com/spreadsheets/d/1cbeerrhYgMk8bu0T9ByyYvvYJ5I5BJ7jFnblePmwe2E/edit"
 
 
-def carica_credenziali():
-    """
-    Carica le credenziali in 3 modi (in ordine di priorità):
-    1. Streamlit secrets (su Cloud)
-    2. File service-account.json (locale)
-    """
-    # METODO 1: Streamlit secrets (per Streamlit Cloud)
+def _fix_private_key(sa_dict):
+    """Normalizza la private_key senza alterarla troppo."""
+    pk = sa_dict.get("private_key", "")
+    if not pk:
+        return sa_dict
+    pk = pk.lstrip()
+    if "\\n" in pk and "\n" not in pk:
+        pk = pk.replace("\\n", "\n")
+    if not pk.endswith("\n"):
+        pk += "\n"
+    sa_dict["private_key"] = pk
+    return sa_dict
+
+
+def _read_service_account_from_dict(d):
+    if not isinstance(d, dict):
+        return None
+    needed = ["type", "project_id", "private_key", "client_email"]
+    if any(k not in d for k in needed):
+        return None
+    return _fix_private_key({k: d[k] for k in d})
+
+
+def get_service_account_dict():
     try:
-        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-            gsheets_secrets = st.secrets["connections"]["gsheets"]
-            if "service_account" in gsheets_secrets:
-                creds = Credentials.from_service_account_info(
-                    gsheets_secrets["service_account"], scopes=SCOPES
-                )
-                return creds
+        if hasattr(st, "secrets"):
+            b64 = st.secrets.get("google_service_account_b64", "")
+            if b64 and isinstance(b64, str) and b64.strip():
+                import base64
+                try:
+                    return _fix_private_key(json.loads(base64.b64decode(b64.strip())))
+                except Exception:
+                    pass
+            for key in ("google_service_account", "gcp_service_account"):
+                val = st.secrets.get(key, None)
+                sa = _read_service_account_from_dict(val)
+                if sa:
+                    return sa
+            raw = st.secrets.get("google_service_account", "")
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    return _fix_private_key(json.loads(raw))
+                except json.JSONDecodeError:
+                    pass
     except Exception:
         pass
 
-    # METODO 2: File JSON locale
-    if os.path.exists(CREDENTIALS_FILE):
-        try:
-            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPES)
-            return creds
-        except Exception as e:
-            st.sidebar.error(f"Errore credenziali: {e}")
+    for secrets_path in [
+        os.path.join(_HERE, "secrets.toml"),
+        os.path.join(os.path.dirname(_HERE), "secrets.toml"),
+    ]:
+        if os.path.exists(secrets_path):
+            try:
+                import tomllib
+                with open(secrets_path, "rb") as f:
+                    data = tomllib.load(f)
+                b64 = data.get("google_service_account_b64", "")
+                if b64 and isinstance(b64, str) and b64.strip():
+                    import base64
+                    return _fix_private_key(json.loads(base64.b64decode(b64.strip())))
+                sa = _read_service_account_from_dict(data.get("google_service_account", {}))
+                if sa:
+                    return sa
+            except Exception:
+                pass
+
     return None
 
 
 def get_sheet_url():
-    """
-    Restituisce l'URL del foglio Google in 3 modi:
-    1. Streamlit secrets
-    2. Variabile d'ambiente
-    3. File sheet_url.txt
-    """
-    # METODO 1: Streamlit secrets
     try:
-        if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
-            url = st.secrets["connections"]["gsheets"].get("spreadsheet", "")
-            if url:
-                return url
+        if hasattr(st, "secrets"):
+            url = st.secrets.get("google_sheet_url", "")
+            if url and isinstance(url, str) and url.strip():
+                return url.strip()
+            gsa = st.secrets.get("google_service_account", None)
+            if isinstance(gsa, dict):
+                url = gsa.get("google_sheet_url", "")
+                if url and isinstance(url, str) and url.strip():
+                    return url.strip()
     except Exception:
         pass
-
-    # METODO 2: Variabile d'ambiente
-    url = os.environ.get("GOOGLE_SHEET_URL")
-    if url:
-        return url
-    
-    # METODO 3: File locale
-    if os.path.exists("sheet_url.txt"):
-        with open("sheet_url.txt", "r") as f:
-            url = f.read().strip()
-            if url:
-                return url
-    
-    return None
+    for d in (_HERE, os.path.dirname(_HERE)):
+        p = os.path.join(d, "sheet_url.txt")
+        if os.path.exists(p):
+            with open(p) as f:
+                return f.read().strip()
+    return _FALLBACK_SHEET_URL
 
 
-def connetti_google_sheets():
-    """
-    Tenta di connettersi a Google Sheets usando gspread.
-    Restituisce (client, foglio) se connesso, altrimenti (None, None).
-    """
+def _apri_foglio():
+    """Apre il foglio Google (gc, sh) o ritorna (None, None)."""
+    sa = get_service_account_dict()
+    if sa is None:
+        return None, None
     try:
-        creds = carica_credenziali()
-        if creds is None:
-            return None, None
-        
-        client = gspread.authorize(creds)
-        
-        sheet_url = get_sheet_url()
-        if sheet_url is None:
-            return None, None
-        
-        # Apre il foglio dall'URL
-        sh = client.open_by_url(sheet_url)
-        
-        # Cerca il foglio di lavoro (worksheet) specificato
-        try:
-            worksheet = sh.worksheet(SHEET_WORKSHEET_NAME)
-        except gspread.exceptions.WorksheetNotFound:
-            # Se non esiste, crea il foglio con intestazioni
-            worksheet = sh.add_worksheet(title=SHEET_WORKSHEET_NAME, rows=1000, cols=20)
-            intestazioni = ["data", "cliente", "cantiere", "km", "ore", "spese", "nota_spesa", "note"]
-            worksheet.append_row(intestazioni)
-        
-        return client, worksheet
-    
+        creds = __import__("google.oauth2.service_account", fromlist=["Credentials"]).Credentials.from_service_account_info(sa, scopes=SCOPES)
+        gc = gspread.authorize(creds)
+        url = get_sheet_url()
+        if url is None:
+            return gc, None
+        sh = gc.open_by_url(url)
+        return gc, sh
     except Exception as e:
-        st.sidebar.error(f"Errore di connessione a Google Sheets: {e}")
+        try:
+            st.sidebar.info(f"ℹ️ Google Sheets offline: {e}")
+        except Exception:
+            pass
         return None, None
 
 
-def leggi_da_google_sheets(worksheet):
-    """
-    Legge tutti i dati dal foglio Google e restituisce una lista di dizionari.
-    """
+def _get_or_create_ws(sh, title, header):
+    """Restituisce il worksheet col nome indicato, creandolo se non esiste."""
+    if sh is None:
+        return None
     try:
-        dati = worksheet.get_all_records()
-        return dati
+        try:
+            return sh.worksheet(title)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=title, rows=1000, cols=20)
+            ws.append_row(header)
+            return ws
+    except Exception:
+        return None
+
+
+def connetti_google_sheets():
+    """Apre il worksheet Rapportini (per compatibilita con app.py)."""
+    gc, sh = _apri_foglio()
+    if sh is None:
+        try:
+            st.sidebar.info("ℹ️ Google Sheets non configurato")
+        except Exception:
+            pass
+        return None, None
+    ws = _get_or_create_ws(sh, SHEET_WORKSHEET_NAME, ["data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
+    return gc, ws
+
+
+def leggi_da_google_sheets(ws):
+    try:
+        return ws.get_all_records()
     except Exception as e:
-        st.error(f"Errore durante la lettura dei dati: {e}")
+        try:
+            st.error(f"Errore lettura: {e}")
+        except Exception:
+            pass
         return []
 
 
-def scrivi_su_google_sheets(worksheet, rapportini):
-    """
-    Sovrascrive tutto il foglio Google con i dati attuali dei rapportini.
-    """
+def scrivi_su_google_sheets(ws, rapportini):
     try:
-        # Prepara i dati come lista di liste
         if not rapportini:
-            # Se non ci sono dati, resetta con solo intestazioni
-            worksheet.clear()
-            worksheet.append_row(["data", "cliente", "cantiere", "km", "ore", "spese", "nota_spesa", "note"])
+            ws.clear()
+            ws.append_row(["data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
             return True
-        
         df = pd.DataFrame(rapportini)
-        
-        # Seleziona solo le colonne che ci interessano
-        colonne = ["data", "cliente", "cantiere", "km", "ore", "spese", "nota_spesa", "note"]
-        colonne_presenti = [c for c in colonne if c in df.columns]
-        
-        if not colonne_presenti:
+        cols = ["data","cliente","cantiere","km","ore","spese","nota_spesa","note"]
+        pres = [c for c in cols if c in df.columns]
+        if not pres:
             return False
-        
-        df = df[colonne_presenti]
-        
-        # Pulisci il foglio
-        worksheet.clear()
-        
-        # Scrivi le intestazioni
-        worksheet.append_row(colonne_presenti)
-        
-        # Scrivi i dati (solo le righe non vuote)
+        df = df[pres]
+        ws.clear()
+        ws.append_row(pres)
         for _, row in df.iterrows():
-            # Salta righe completamente vuote
-            if all(pd.isna(v) or str(v).strip() == "" for v in row):
+            if all(pd.isna(v) or str(v).strip()=="" for v in row):
                 continue
-            riga = []
-            for col in colonne_presenti:
-                val = row[col]
-                if pd.isna(val):
-                    riga.append("")
-                else:
-                    riga.append(str(val))
-            worksheet.append_row(riga)
-        
+            ws.append_row(["" if pd.isna(row[c]) else str(row[c]) for c in pres])
         return True
-    
     except Exception as e:
-        st.error(f"Errore durante la scrittura su Google Sheets: {e}")
+        try:
+            st.error(f"Errore scrittura: {e}")
+        except Exception:
+            pass
+        return False
+
+
+# ============================================================
+# NUOVE FUNZIONI per la gestione persistente dei clienti
+# ============================================================
+def leggi_clienti_da_gsheets():
+    """Ritorna un dict {nome: {'prezzo_ora': float, 'prezzo_km': float}} letto da Google Sheets.
+    Ritorna {} se Google Sheets non è disponibile o il worksheet non esiste ancora."""
+    try:
+        gc, sh = _apri_foglio()
+        if sh is None:
+            return {}
+        ws = _get_or_create_ws(sh, SHEET_WORKSHEET_CLIENTI, ["nome", "prezzo_ora", "prezzo_km"])
+        if ws is None:
+            return {}
+        records = ws.get_all_records()
+        result = {}
+        for r in records:
+            nome = str(r.get("nome", "")).strip()
+            if not nome:
+                continue
+            try:
+                p_ora = float(r.get("prezzo_ora", 0) or 0)
+            except (ValueError, TypeError):
+                p_ora = 0.0
+            try:
+                p_km = float(r.get("prezzo_km", 0) or 0)
+            except (ValueError, TypeError):
+                p_km = 0.0
+            result[nome] = {"prezzo_ora": p_ora, "prezzo_km": p_km}
+        return result
+    except Exception as e:
+        try:
+            st.sidebar.info(f"ℹ️ Lettura clienti offline: {e}")
+        except Exception:
+            pass
+        return {}
+
+
+def scrivi_clienti_su_gsheets(clienti_dict):
+    """Sovrascrive il foglio 'Clienti' con il dict passato."""
+    try:
+        gc, sh = _apri_foglio()
+        if sh is None:
+            return False
+        ws = _get_or_create_ws(sh, SHEET_WORKSHEET_CLIENTI, ["nome", "prezzo_ora", "prezzo_km"])
+        if ws is None:
+            return False
+        ws.clear()
+        ws.append_row(["nome", "prezzo_ora", "prezzo_km"])
+        for nome, info in clienti_dict.items():
+            ws.append_row([str(nome), str(info.get("prezzo_ora", 0)), str(info.get("prezzo_km", 0))])
+        return True
+    except Exception as e:
+        try:
+            st.sidebar.info(f"ℹ️ Scrittura clienti offline: {e}")
+        except Exception:
+            pass
         return False
