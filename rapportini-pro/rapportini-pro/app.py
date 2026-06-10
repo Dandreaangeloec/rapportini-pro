@@ -21,7 +21,7 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="Rapportini Pro - D'Andrea Angelo E.C.", page_icon="📋", layout="centered")
 
-# --- META TAG PWA (per installazione come app su smartphone) ---
+# --- META TAG PWA + SERVICE WORKER + INDEXED DB + SYNC ENGINE ---
 st.markdown('''
 <link rel="manifest" href="./static/manifest.json">
 <meta name="mobile-web-app-capable" content="yes">
@@ -31,6 +31,8 @@ st.markdown('''
 <meta name="theme-color" content="#4f8bf9">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="apple-touch-icon" href="./static/logo-192.png">
+<script src="./static/db.js"></script>
+<script src="./static/sync.js"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
@@ -43,6 +45,16 @@ if ('serviceWorker' in navigator) {
 }
 </script>
 ''', unsafe_allow_html=True)
+
+# --- SYNC ENGINE: elementi nascosti per comunicazione JS <-> Python ---
+st.markdown('''
+<div id="rapportini-sync-status" style="display:none;"></div>
+<div id="rapportini-sync-trigger" style="display:none;"></div>
+<div id="rapportini-sync-rerun" style="display:none;"></div>
+''', unsafe_allow_html=True)
+
+# Badge pending (visibile via JS)
+st.markdown('''<span id="rapportini-pending-badge" class="pending-badge">0</span>''', unsafe_allow_html=True)
 
 
 # --- SCHERMATA DI LOGIN ---
@@ -110,6 +122,16 @@ css_code = """
     }
     .stat-val { font-size: 22px; font-weight: bold; color: var(--text-color); }
     .stat-lbl { font-size: 12px; color: var(--text-color); opacity: 0.7; }
+    .pending-badge {
+        display: none;
+        background-color: #ef4444;
+        color: white;
+        font-size: 11px;
+        padding: 2px 7px;
+        border-radius: 10px;
+        margin-left: 6px;
+        vertical-align: super;
+    }
     </style>
 """
 

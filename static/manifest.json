@@ -1,13 +1,17 @@
 {
   "name": "Rapportini Pro - D'Andrea Angelo E.C.",
   "short_name": "Rapportini Pro",
-  "description": "Gestione Rapportini di Lavoro",
-  "start_url": "./",
+  "description": "Gestione Rapportini di Lavoro - D'Andrea Angelo E.C.",
+  "start_url": "./?utm_source=pwa",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#f8fafc",
+  "background_color": "#0f172a",
   "theme_color": "#4f8bf9",
+  "categories": ["business", "productivity"],
+  "lang": "it-IT",
+  "dir": "ltr",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "./static/logo-192.png",
@@ -20,6 +24,14 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "./static/logo-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
-  ]
+  ],
+  "screenshots": [],
+  "splash_pages": null
 }
