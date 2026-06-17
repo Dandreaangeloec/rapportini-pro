@@ -342,19 +342,20 @@ def genera_pdf(dati, mese_sel, cliente_sel, imponibile, flag_iva, perc_iva, flag
     if cliente_sel != "Tutti i clienti": titolo_report += f" ({cliente_sel.upper()})"
     pdf.cell(190, 10, txt=clean_txt(titolo_report), ln=True, align="C"); pdf.ln(5)
     pdf.set_font("Arial", "B", 9); pdf.set_fill_color(241, 245, 249)
-    headers = [("Data", 22), ("Cliente", 38), ("Cantiere", 35), ("Ore", 14), ("Tar. Ora", 18), ("Km", 12), ("Tar. Km", 18), ("Spese", 15), ("Totale", 18)]
+    headers = [("Data", 22), ("Cliente", 34), ("Cantiere", 30), ("Ore", 12), ("Tar. Ora", 16), ("Km", 10), ("Tar. Km", 16), ("Spese", 13), ("Nota Spesa", 22), ("Totale", 15)]
     for h, w in headers: pdf.cell(w, 8, h, 1, 0, "C", True)
-    pdf.ln(8); pdf.set_font("Arial", "", 8)
+    pdf.ln(8); pdf.set_font("Arial", "", 7)
     for r in dati:
         pdf.cell(22, 8, clean_txt(r["Data"]), 1, 0, "C")
-        pdf.cell(38, 8, clean_txt(r["Cliente"])[:22], 1, 0, "L")
-        pdf.cell(35, 8, clean_txt(r["Cantiere"])[:20], 1, 0, "L")
-        pdf.cell(14, 8, clean_txt(r["Ore"]), 1, 0, "C")
-        pdf.cell(18, 8, clean_txt(r["Tariffa/h"]), 1, 0, "C")
-        pdf.cell(12, 8, clean_txt(r["Km"]), 1, 0, "C")
-        pdf.cell(18, 8, clean_txt(r["Tariffa/Km"]), 1, 0, "C")
-        pdf.cell(15, 8, clean_txt(r["Spese Extra"]), 1, 0, "C")
-        pdf.cell(18, 8, clean_txt(r["Totale Lordo"]), 1, 1, "R")
+        pdf.cell(34, 8, clean_txt(r["Cliente"])[:18], 1, 0, "L")
+        pdf.cell(30, 8, clean_txt(r["Cantiere"])[:16], 1, 0, "L")
+        pdf.cell(12, 8, clean_txt(r["Ore"]), 1, 0, "C")
+        pdf.cell(16, 8, clean_txt(r["Tariffa/h"]), 1, 0, "C")
+        pdf.cell(10, 8, clean_txt(r["Km"]), 1, 0, "C")
+        pdf.cell(16, 8, clean_txt(r["Tariffa/Km"]), 1, 0, "C")
+        pdf.cell(13, 8, clean_txt(r["Spese Extra"]), 1, 0, "C")
+        pdf.cell(22, 8, clean_txt(r.get("Nota Spesa", ""))[:12], 1, 0, "C")
+        pdf.cell(15, 8, clean_txt(r["Totale Lordo"]), 1, 1, "R")
     pdf.ln(4); pdf.set_font("Arial", "", 10); pdf.cell(125, 7, "", 0, 0)
     pdf.cell(35, 7, clean_txt("Totale Imponibile:"), 0, 0, "R")
     pdf.cell(30, 7, clean_txt("\x80 " + f"{imponibile:,.2f}"), 1, 1, "R")
@@ -395,6 +396,13 @@ def genera_pdf_note(rapportini_filtrati, mese_sel, cliente_sel):
         info_blocco = " DATA: " + formatta_data(r["data"]) + "   |   CLIENTE: " + r["cliente"] + "   |   CANTIERE: " + r["cantiere"]
         pdf.cell(190, 7, txt=clean_txt(info_blocco), border=1, ln=True, fill=True)
         pdf.set_font("Arial", "", 10); pdf.set_text_color(51, 65, 85); pdf.ln(2)
+        # Mostra la nota spesa se presente
+        nota_spesa_txt = r.get("nota_spesa", "")
+        if nota_spesa_txt and str(nota_spesa_txt).strip() != "nan" and str(nota_spesa_txt).strip():
+            pdf.set_font("Arial", "I", 10)
+            pdf.multi_cell(190, 5, txt=clean_txt("Causale spesa: " + nota_spesa_txt), border=0)
+            pdf.ln(2)
+            pdf.set_font("Arial", "", 10)
         testo_nota = r["note"].strip() if "note" in r and r["note"] and str(r["note"]).strip() != "nan" else "Nessuna nota registrata."
         pdf.multi_cell(190, 5, txt=clean_txt("Note: " + testo_nota), border=0)
         pdf.ln(4); pdf.set_draw_color(226, 232, 240); pdf.line(10, pdf.get_y(), 200, pdf.get_y()); pdf.ln(4)
@@ -482,6 +490,8 @@ st.markdown("""
 if menu == "Rapportini Aziendali":
     st.title("Rapportini Aziendali")
     st.caption("D'Andrea Angelo E.C. - Gestione e Controllo Interventi")
+    
+    # Stats in alto
     tot_rapportini = len(st.session_state.rapportini)
     tot_km = sum(int(float(r["km"])) for r in st.session_state.rapportini if "km" in r and str(r["km"]) != "nan")
     tot_ore = sum(float(r["ore"]) for r in st.session_state.rapportini if "ore" in r and str(r["ore"]) != "nan")
@@ -489,35 +499,91 @@ if menu == "Rapportini Aziendali":
     with col1: st.markdown(f'<div class="card"><span class="stat-val">📄 {tot_rapportini}</span><br><span class="stat-lbl">Rapportini Totali</span></div>', unsafe_allow_html=True)
     with col2: st.markdown(f'<div class="card"><span class="stat-val">🕒 {tot_ore} ore</span><br><span class="stat-lbl">Tempo Totale</span></div>', unsafe_allow_html=True)
     with col3: st.markdown(f'<div class="card"><span class="stat-val">🚀 {tot_km} km</span><br><span class="stat-lbl">Distanza Totale</span></div>', unsafe_allow_html=True)
-    st.subheader("Elenco rapportini")
     
-    if len(st.session_state.rapportini) == 0:
+    # Stato per il mese selezionato
+    if "mese_selezionato" not in st.session_state:
+        st.session_state.mese_selezionato = None
+    
+    # Raccogli i mesi presenti nei rapportini
+    mesi_presenti = set()
+    for r in st.session_state.rapportini:
+        data_str = str(r.get("data", ""))
+        if "-" in data_str:
+            mm = data_str.split("-")[1]
+            for nome_mese, codice in MESI_DICT.items():
+                if codice == mm:
+                    mesi_presenti.add(nome_mese)
+                    break
+    
+    # Pulsanti mensili
+    st.subheader("📆 Rapportini per mese")
+    if not st.session_state.rapportini:
         st.info("Nessun rapportino salvato.")
-    
-    for idx, r in enumerate(reversed(st.session_state.rapportini)):
-        idx_reale = len(st.session_state.rapportini) - 1 - idx
-        with st.container():
-            st.markdown(f"""
-            <div class="card">
-                <div style="display:flex; align-items: center;">
-                    <strong style="color: var(--text-color); font-size: 16px;">{r.get('cliente', 'Sconosciuto')}</strong>
+    else:
+        # Griglia pulsanti mese: 4 colonne
+        mesi_ordinati = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
+                         "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"]
+        cols = st.columns(4)
+        for i, nome_mese in enumerate(mesi_ordinati):
+            with cols[i % 4]:
+                conteggio = sum(1 for r in st.session_state.rapportini 
+                                if str(r.get("data","")).split("-")[1] == MESI_DICT[nome_mese])
+                if conteggio > 0:
+                    label = f"{nome_mese[:3]}\n({conteggio})"
+                    if st.session_state.mese_selezionato == nome_mese:
+                        st.button(label, key=f"mese_{nome_mese}", use_container_width=True,
+                                  type="primary")
+                    else:
+                        if st.button(label, key=f"mese_{nome_mese}", use_container_width=True):
+                            st.session_state.mese_selezionato = nome_mese
+                            st.rerun()
+                else:
+                    st.button(f"{nome_mese[:3]}\n(0)", key=f"mese_{nome_mese}", use_container_width=True, disabled=True)
+        
+        # Bottone per deselezionare il mese
+        if st.session_state.mese_selezionato is not None:
+            if st.button("❌ Mostra tutti", use_container_width=True):
+                st.session_state.mese_selezionato = None
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Filtra i rapportini in base al mese selezionato
+        if st.session_state.mese_selezionato is not None:
+            codice_mese = MESI_DICT[st.session_state.mese_selezionato]
+            rapportini_filtrati = [r for r in st.session_state.rapportini 
+                                   if str(r.get("data","")).split("-")[1] == codice_mese]
+            st.subheader(f"📋 {st.session_state.mese_selezionato} ({len(rapportini_filtrati)} rapportini)")
+        else:
+            rapportini_filtrati = list(st.session_state.rapportini)
+            st.subheader(f"📋 Tutti i rapportini ({len(rapportini_filtrati)})")
+        
+        # Mostra i rapportini filtrati
+        for idx, r in enumerate(reversed(rapportini_filtrati)):
+            # Calcola indice reale in st.session_state.rapportini
+            idx_reale = st.session_state.rapportini.index(r)
+            with st.container():
+                st.markdown(f"""
+                <div class="card">
+                    <div style="display:flex; align-items: center;">
+                        <strong style="color: var(--text-color); font-size: 16px;">{r.get('cliente', 'Sconosciuto')}</strong>
+                    </div>
+                    <div style="color: var(--text-color); opacity: 0.7; font-size:13px; margin-top:5px;">📍 {r.get('cantiere','-')} | 📅 {formatta_data(r.get('data','-'))}</div>
+                    <div style="margin-top:8px; font-size:13px; color: var(--text-color); opacity: 0.85;">
+                        🚗 {r.get('km', 0)} km  •  🕒 {r.get('ore', 0.0)} ore  •  🧾 Spese: € {float(r.get('spese',0.0)):.2f}
+                    </div>
+                    {f'<div style="margin-top:8px; font-size:12px; font-style:italic; background:rgba(128,128,128,0.08); padding:6px; border-radius:6px;">📝 {r["note"]}</div>' if r.get("note") and str(r["note"]) != "nan" else ""}
                 </div>
-                <div style="color: var(--text-color); opacity: 0.7; font-size:13px; margin-top:5px;">📍 {r.get('cantiere','-')} | 📅 {formatta_data(r.get('data','-'))}</div>
-                <div style="margin-top:8px; font-size:13px; color: var(--text-color); opacity: 0.85;">
-                    🚗 {r.get('km', 0)} km  •  🕒 {r.get('ore', 0.0)} ore  •  🧾 Spese: € {float(r.get('spese',0.0)):.2f}
-                </div>
-                {f'<div style="margin-top:8px; font-size:12px; font-style:italic; background:rgba(128,128,128,0.08); padding:6px; border-radius:6px;">📝 {r["note"]}</div>' if r.get("note") and str(r["note"]) != "nan" else ""}
-            </div>
-            """, unsafe_allow_html=True)
-            col_mod, col_elim = st.columns(2)
-            with col_mod:
-                if st.button("✏️ Modifica", key=f"mod_{idx_reale}", use_container_width=True):
-                    st.session_state.modifica_idx = idx_reale
-                    st.rerun()
-            with col_elim:
-                if st.button("🗑️ Elimina", key=f"del_{idx_reale}", use_container_width=True):
-                    st.session_state.elimina_idx = idx_reale
-                    st.rerun()
+                """, unsafe_allow_html=True)
+                col_mod, col_elim = st.columns(2)
+                with col_mod:
+                    if st.button("✏️ Modifica", key=f"mod_{idx_reale}", use_container_width=True):
+                        st.session_state.modifica_idx = idx_reale
+                        st.rerun()
+                with col_elim:
+                    if st.button("🗑️ Elimina", key=f"del_{idx_reale}", use_container_width=True):
+                        st.session_state.elimina_idx = idx_reale
+                        st.rerun()
 
 elif menu == "Nuovo Rapportino":
     st.title("Nuovo Rapportino")
@@ -665,11 +731,15 @@ elif menu == "Report Mensili e Clienti":
             prezzi_cli = st.session_state.clienti_dict.get(r["cliente"], {"prezzo_ora": 0, "prezzo_km": 0})
             tot_voce = calcola_totale_rapportino(r)
             totale_imponibile += tot_voce
+            nota_spesa_val = r.get("nota_spesa", "")
+            if not nota_spesa_val or str(nota_spesa_val) == "nan":
+                nota_spesa_val = ""
             dati_completi.append({
                 "Data": formatta_data(r.get("data", "-")), "Cliente": r.get("cliente", "-"), "Cantiere": r.get("cantiere", "-"),
                 "Ore": str(r.get("ore", 0.0)), "Tariffa/h": f"€ {prezzi_cli['prezzo_ora']:.2f}",
                 "Km": str(r.get("km", 0)), "Tariffa/Km": f"€ {prezzi_cli['prezzo_km']:.2f}",
-                "Spese Extra": f"€ {float(r.get('spese',0.0)):.2f}", "Totale Lordo": f"€ {tot_voce:.2f}"
+                "Spese Extra": f"€ {float(r.get('spese',0.0)):.2f}", "Nota Spesa": nota_spesa_val,
+                "Totale Lordo": f"€ {tot_voce:.2f}"
             })
         st.dataframe(pd.DataFrame(dati_completi), use_container_width=True)
         st.markdown(f"**Totale Imponibile:** € {totale_imponibile:,.2f}")
