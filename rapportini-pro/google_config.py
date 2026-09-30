@@ -139,19 +139,9 @@ def _connetti_google_sheets_ws(_sheet_key, _ws_title):
         return None, None
     ws = _get_ws_sicuro(sh, _ws_title)
     if ws is not None:
-        # Migrazione: assicura che l'header contenga la colonna "id" (solo 1 volta)
-        # FIX: stesso controllo rigoroso di scrivi_su_google_sheets per evitare
-        # insert_cols ripetuti che aggiungono colonne vuote.
-        try:
-            riga0 = ws.row_values(1)
-            riga0_clean = [str(c).strip().lower() for c in riga0]
-            id_gia_presente = "id" in riga0_clean
-            a1_vuoto_o_diverso = (not riga0) or riga0_clean[0] != "id"
-            if a1_vuoto_o_diverso and not id_gia_presente:
-                ws.insert_cols(1)
-                ws.update("A1", "id")
-        except Exception:
-            pass  # se fallisce non è bloccante
+        # FIX: NON insert_cols. Il foglio legacy resta com'è (senza colonna id).
+        # L'adoption avviene per firma in scrivi_su_google_sheets.
+        pass
     return gc, ws
 
 
@@ -315,24 +305,18 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
     HEADERS = ["id", "data", "cliente", "cantiere", "km", "ore", "spese", "nota_spesa", "note"]
 
     try:
-        # 0. Assicura che la colonna "id" esista come PRIMA colonna (A).
-        #    FIX: controllo rigoroso — inserisci SOLO se A1 è vuoto o non "id",
-        #    e SOLO se "id" non è già presente in nessun'altra cella della riga 1.
-        #    Prima: se riga0 era vuota o c'era spazio -> insert_cols ad ogni scrittura.
+        # 0. NON inserire MAI colonne. Il foglio legacy (senza colonna "id")
+        #    resta con la sua struttura originale. L'adoption avviene per firma
+        #    (data|cliente|cantiere) senza toccare l'header.
+        #    FIX: prima insert_cols(1) sfalsava tutte le colonne a destra e
+        #    perdeva i dati ("foglio si incasina").
         try:
-            riga0 = ws.row_values(1)
-            riga0_clean = [str(c).strip().lower() for c in riga0]
-            id_gia_presente = "id" in riga0_clean
-            a1_vuoto_o_diverso = (not riga0) or riga0_clean[0] != "id"
-            if a1_vuoto_o_diverso and not id_gia_presente:
-                ws.insert_cols(1)
-                ws.update("A1", "id")
-        except Exception as e:
-            # Non bloccante, ma log visibile in debug
-            try:
-                st.sidebar.caption(f"⚠️ Migrazione header id: {e}")
-            except Exception:
-                pass
+            valori_header = ws.row_values(1)
+            h_clean = [str(c).strip().lower() for c in valori_header]
+            ha_colonna_id = "id" in h_clean
+        except Exception:
+            ha_colonna_id = False
+            valori_header = []
 
         # 1. Leggi lo stato ATTUALE del foglio
         try:
@@ -356,7 +340,7 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
                 for i, hh in enumerate(h):
                     if hh:
                         d[hh] = row[i]
-                rid = str(d.get("id", "")).strip()
+                rid = str(d.get("id", "")).strip() if ha_colonna_id else ""
                 if rid:
                     sheet_rows[rid] = d
                     sheet_row_by_index[rid] = idx
@@ -379,7 +363,7 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
 
         for r in rapportini:
             rec = dict(r)
-            rid = str(rec.get("id", "")).strip()
+            rid = str(rec.get("id", "")).strip() if ha_colonna_id else ""
             firma = "|".join([
                 str(rec.get("data", "")).strip(),
                 str(rec.get("cliente", "")).strip(),
@@ -388,7 +372,7 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
             if firma:
                 firme_in_memoria.add(firma)
 
-            if rid:
+            if ha_colonna_id and rid:
                 id_presenti_in_memoria.append(rid)
                 if rid in sheet_rows:
                     # Id già presente nel foglio → aggiorna in-place
@@ -403,19 +387,24 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
                     # Id presente ma nessuna riga legacy corrispondente → nuovo
                     da_aggiungere.append(rec)
             else:
-                # Record senza id: prova ADOPTION su una riga legacy
+                # Record senza id O foglio senza colonna id:
+                # prova ADOPTION su una riga legacy per firma
                 if firma and firma in legacy_rows:
                     idx_legacy, _ = legacy_rows[firma]
-                    # Assegna un id univoco al record e aggiorna in-place
-                    nuovo_id = str(uuid.uuid4())
-                    rec["id"] = nuovo_id
-                    r["id"] = nuovo_id          # salva in session_state
+                    if ha_colonna_id:
+                        # Il foglio HA colonna id: assegna id univoco
+                        nuovo_id = str(uuid.uuid4())
+                        rec["id"] = nuovo_id
+                        r["id"] = nuovo_id          # salva in session_state
+                    # Se foglio NON ha colonna id: rec resta senza id e
+                    # _riga_per() scriverà solo i campi data..note
                     da_aggiornare.append((idx_legacy, rec))
                 else:
                     # Nessuna riga legacy corrispondente → nuovo record
-                    nuovo_id = str(uuid.uuid4())
-                    rec["id"] = nuovo_id
-                    r["id"] = nuovo_id          # salva in session_state
+                    if ha_colonna_id:
+                        nuovo_id = str(uuid.uuid4())
+                        rec["id"] = nuovo_id
+                        r["id"] = nuovo_id          # salva in session_state
                     da_aggiungere.append(rec)
 
         # 3. Determina i record da ELIMINARE (solo rimozioni esplicite)
@@ -429,9 +418,13 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
 
         # 4. Applica le operazioni sul foglio (in BATCH: una sola chiamata API
         #    per gruppo invece di una chiamata per riga → molto più veloce)
+        # Colonne da scrivere: se il foglio NON ha la colonna "id",
+        # scrivi solo data..note (8 colonne), altrimenti id..note (9).
+        COLONNE_SCRITTE = HEADERS if ha_colonna_id else HEADERS[1:]
+
         def _riga_per(rec):
             row_to_write = []
-            for c in HEADERS:
+            for c in COLONNE_SCRITTE:
                 v = rec.get(c, "")
                 if v is None:
                     v = ""
@@ -447,7 +440,7 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
 
         # 4b. Update record esistenti raggruppando le righe contigue
         #     (una chiamata per blocco invece di una per riga)
-        #     FIX: calcola la lettera dell'ultima colonna da len(HEADERS)
+        #     FIX: calcola la lettera dell'ultima colonna da len(COLONNE_SCRITTE)
         #     invece di hardcoded "I" (che presupponeva 9 colonne)
         def _col_letter(n):
             """Converte numero colonna 1-based in lettera (1=A, 27=AA, ...)."""
@@ -457,7 +450,7 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
                 letters = chr(65 + rem) + letters
             return letters
 
-        ultima_col = _col_letter(len(HEADERS))
+        ultima_col = _col_letter(len(COLONNE_SCRITTE))
 
         if da_aggiornare:
             da_aggiornare.sort(key=lambda x: x[0])
