@@ -276,9 +276,9 @@ if st.session_state.modifica_idx is not None:
         )
         cantiere = st.text_input("Cantiere", value=r.get("cantiere",""))
         data = st.date_input("Data", value=datetime.strptime(r.get("data","2026-01-01"), "%Y-%m-%d") if r.get("data") else datetime.now())
-        km = st.number_input("Km", min_value=0, value=int(r.get("km",0)))
-        ore = st.number_input("Ore", min_value=0.0, value=float(r.get("ore",0.0)), step=0.5)
-        spese = st.number_input("Spese (€)", min_value=0.0, value=float(r.get("spese",0.0)), step=0.5)
+        km = st.number_input("Km", min_value=0, value=_int(r.get("km",0)))
+        ore = st.number_input("Ore", min_value=0.0, value=_num(r.get("ore",0.0)), step=0.5)
+        spese = st.number_input("Spese (€)", min_value=0.0, value=_num(r.get("spese",0.0)), step=0.5)
         nota_spesa = st.text_input("Nota spesa", value=r.get("nota_spesa",""))
         note = st.text_area("Note", value=r.get("note",""))
         col_s, col_c = st.columns(2)
@@ -328,6 +328,23 @@ def calcola_totale_rapportino(r):
     except (ValueError, TypeError):
         ore, km, spese = 0.0, 0, 0.0
     return (ore * cli_info["prezzo_ora"]) + (km * cli_info["prezzo_km"]) + spese
+
+def _num(val, default=0.0):
+    """Converte in float in modo sicuro: stringhe vuote, None, 'nan', '-', ecc.
+    restituiscono il valore di default invece di lanciare ValueError."""
+    if val is None:
+        return default
+    s = str(val).strip()
+    if s == "" or s.lower() == "nan" or s == "-":
+        return default
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return default
+
+def _int(val, default=0):
+    """Come _num ma ritorna intero (utile per i km)."""
+    return int(_num(val, float(default)))
 
 def formatta_data(data_str):
     """Converte data da formato ISO (YYYY-MM-DD) a formato italiano (dd/mm/YYYY)."""
@@ -530,8 +547,8 @@ if menu == "Rapportini Aziendali":
     
     # Stats in alto
     tot_rapportini = len(st.session_state.rapportini)
-    tot_km = sum(int(float(r["km"])) for r in st.session_state.rapportini if "km" in r and str(r["km"]) != "nan")
-    tot_ore = sum(float(r["ore"]) for r in st.session_state.rapportini if "ore" in r and str(r["ore"]) != "nan")
+    tot_km = sum(_int(r.get("km", 0)) for r in st.session_state.rapportini)
+    tot_ore = sum(_num(r.get("ore", 0)) for r in st.session_state.rapportini)
     col1, col2, col3 = st.columns(3)
     with col1: st.markdown(f'<div class="card"><span class="stat-val">📄 {tot_rapportini}</span><br><span class="stat-lbl">Rapportini Totali</span></div>', unsafe_allow_html=True)
     with col2: st.markdown(f'<div class="card"><span class="stat-val">🕒 {tot_ore} ore</span><br><span class="stat-lbl">Tempo Totale</span></div>', unsafe_allow_html=True)
@@ -556,7 +573,7 @@ if menu == "Rapportini Aziendali":
                     </div>
                     <div style="color: var(--text-color); opacity: 0.7; font-size:13px; margin-top:5px;">📍 {r.get('cantiere','-')} | 📅 {formatta_data(r.get('data','-'))}</div>
                     <div style="margin-top:8px; font-size:13px; color: var(--text-color); opacity: 0.85;">
-                        🚗 {r.get('km', 0)} km  •  🕒 {r.get('ore', 0.0)} ore  •  🧾 Spese: € {float(r.get('spese',0.0)):.2f}
+                        🚗 {_int(r.get('km', 0))} km  •  🕒 {_num(r.get('ore', 0.0))} ore  •  🧾 Spese: € {_num(r.get('spese',0.0)):.2f}
                     </div>
                     {f'<div style="margin-top:8px; font-size:12px; font-style:italic; background:rgba(128,128,128,0.08); padding:6px; border-radius:6px;">📝 {r["note"]}</div>' if r.get("note") and str(r["note"]) != "nan" else ""}
                 </div>
@@ -715,7 +732,13 @@ elif menu == "Report Mensili e Clienti":
     valore_aliquota = st.number_input("Specifica Aliquota IVA (%)", min_value=0, max_value=100, value=22, step=1) if attiva_iva else 22
     st.markdown('</div>', unsafe_allow_html=True)
     codice_mese = MESI_DICT[mese]
-    rapportini_filtrati = [r for r in st.session_state.rapportini if str(r.get("data", "")).split("-")[1] == codice_mese and (cliente_selezionato == "Tutti i clienti" or r.get("cliente") == cliente_selezionato)]
+
+    def _mese_di(r):
+        """Estrae il mese (MM) dalla data 'YYYY-MM-DD'; None se data vuota/non valida."""
+        parti = str(r.get("data", "") or "").split("-")
+        return parti[1] if len(parti) >= 2 else None
+
+    rapportini_filtrati = [r for r in st.session_state.rapportini if _mese_di(r) == codice_mese and (cliente_selezionato == "Tutti i clienti" or r.get("cliente") == cliente_selezionato)]
     if rapportini_filtrati:
         dati_completi = []
         totale_imponibile = 0.0
@@ -728,9 +751,9 @@ elif menu == "Report Mensili e Clienti":
                 nota_spesa_val = ""
             dati_completi.append({
                 "Data": formatta_data(r.get("data", "-")), "Cliente": r.get("cliente", "-"), "Cantiere": r.get("cantiere", "-"),
-                "Ore": str(r.get("ore", 0.0)), "Tariffa/h": f"€ {prezzi_cli['prezzo_ora']:.2f}",
-                "Km": str(r.get("km", 0)), "Tariffa/Km": f"€ {prezzi_cli['prezzo_km']:.2f}",
-                "Spese Extra": f"€ {float(r.get('spese',0.0)):.2f}", "Nota Spesa": nota_spesa_val,
+                "Ore": str(_num(r.get("ore", 0.0))), "Tariffa/h": f"€ {prezzi_cli['prezzo_ora']:.2f}",
+                "Km": str(_int(r.get("km", 0))), "Tariffa/Km": f"€ {prezzi_cli['prezzo_km']:.2f}",
+                "Spese Extra": f"€ {_num(r.get('spese',0.0)):.2f}", "Nota Spesa": nota_spesa_val,
                 "Totale Lordo": f"€ {tot_voce:.2f}"
             })
         st.dataframe(pd.DataFrame(dati_completi), use_container_width=True)
