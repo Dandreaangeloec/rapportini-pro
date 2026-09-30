@@ -36,3 +36,9 @@ credentials_*.json
 streamlit_run.log
 streamlit_run.log.err
 diag.txt
+
+# File con secrets in chiaro (MAI su GitHub)
+STREAMLIT_CLOUD_SECRETS.txt
+*_SECRETS*.txt
+*.b64
+secrets*.txt
