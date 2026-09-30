@@ -6,6 +6,7 @@ from streamlit_drawable_canvas import st_canvas
 import io
 import os
 import base64
+import uuid
 from google_config import connetti_google_sheets, leggi_da_google_sheets, scrivi_su_google_sheets, leggi_clienti_da_gsheets, scrivi_clienti_su_gsheets
 
 # Prova a caricare FPDF in modo robusto
@@ -164,15 +165,27 @@ _CLIENTI_DEFAULT = {
     "Rossi Costruzioni": {"prezzo_ora": 50.0, "prezzo_km": 0.60},
     "Verdi Impianti": {"prezzo_ora": 48.0, "prezzo_km": 0.55},
 }
+# Flag: dice se i clienti sono stati letti con successo da Google Sheets
+if "clienti_da_gsheets" not in st.session_state:
+    st.session_state.clienti_da_gsheets = False
+
 if "clienti_dict" not in st.session_state:
     # Prova a leggere i clienti da Google Sheets (persistenza tra sessioni)
     clienti_persisti = leggi_clienti_da_gsheets()
     if clienti_persisti:
         st.session_state.clienti_dict = clienti_persisti
+        st.session_state.clienti_da_gsheets = True
     else:
+        # IMPORTANTE: NON sovrascrivere mai i clienti su Sheets quando la
+        # lettura fallisce (rete lenta/temporanea). Si parte comunque dai
+        # default in memoria, ma NON si riscrivono su Google Sheets.
         st.session_state.clienti_dict = dict(_CLIENTI_DEFAULT)
-        # Salva i default su Google Sheets al primo avvio, cosi' l'utente puo' modificarli ovunque
-        scrivi_clienti_su_gsheets(_CLIENTI_DEFAULT)
+        # Scrivi i default SOLO al primissimo avvio (quando non c'è ancora
+        # connessione verificata) — qui usiamo un bell approccio: proviamo,
+        # ma se la scrittura fallisce non è un problema.
+        if leggi_clienti_da_gsheets is not None:
+            # Lascia che sia la prima modifica utente a scrivere i dati
+            pass
 
 # --- INIZIALIZZAZIONE RAPPORTINI ---
 if "rapportini" not in st.session_state:
@@ -221,9 +234,10 @@ if st.session_state.elimina_idx is not None:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🗑️ Sì, elimina", use_container_width=True, key="confirm_delete"):
+            old_snapshot = [dict(x) for x in st.session_state.rapportini]
             st.session_state.rapportini.pop(idx)
             if conn_disponibile and gworksheet is not None:
-                scrivi_su_google_sheets(gworksheet, st.session_state.rapportini)
+                scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot)
             st.session_state.elimina_idx = None
             st.success("Rapportino eliminato!")
             st.rerun()
@@ -238,8 +252,23 @@ if st.session_state.modifica_idx is not None:
     idx = st.session_state.modifica_idx
     r = st.session_state.rapportini[idx]
     st.subheader(f"✏️ Modifica rapportino #{idx+1} - {r.get('cliente','?')}")
+    # Menu a tendina dei clienti già memorizzati nel listino.
+    # Il cliente attuale del rapportino viene mostrato come opzione selezionata
+    # anche se non è (più) presente nel listino, così il dato non va perso.
+    cliente_attuale = str(r.get("cliente", "") or "")
+    clienti_memorizzati = list(st.session_state.clienti_dict.keys())
+    opzioni_clienti = [cliente_attuale] + [c for c in clienti_memorizzati if c != cliente_attuale]
+    opzioni_clienti = [c for c in opzioni_clienti if c]
+    if not opzioni_clienti:
+        opzioni_clienti = [""]
     with st.form("form_modifica"):
-        cliente = st.text_input("Cliente", value=r.get("cliente",""))
+        cliente = st.selectbox(
+            "Cliente",
+            opzioni_clienti,
+            index=opzioni_clienti.index(cliente_attuale) if cliente_attuale in opzioni_clienti else 0,
+            key=f"mod_cliente_{idx}",
+            help="Scegli un cliente già memorizzato dall'elenco.",
+        )
         cantiere = st.text_input("Cantiere", value=r.get("cantiere",""))
         data = st.date_input("Data", value=datetime.strptime(r.get("data","2026-01-01"), "%Y-%m-%d") if r.get("data") else datetime.now())
         km = st.number_input("Km", min_value=0, value=int(r.get("km",0)))
@@ -254,13 +283,17 @@ if st.session_state.modifica_idx is not None:
             annulla_mod = st.form_submit_button("❌ Annulla", use_container_width=True)
     
     if salva_mod:
-        st.session_state.rapportini[idx] = {
+        old_snapshot = [dict(x) for x in st.session_state.rapportini]
+        id_esistente = st.session_state.rapportini[idx].get("id", "")
+        nuovo_dett = {
+            "id": id_esistente if id_esistente else str(uuid.uuid4()),
             "cliente": cliente, "cantiere": cantiere, "data": str(data),
             "km": int(km), "ore": float(ore), "spese": float(spese),
             "nota_spesa": nota_spesa, "note": note
         }
+        st.session_state.rapportini[idx] = nuovo_dett
         if conn_disponibile and gworksheet is not None:
-            scrivi_su_google_sheets(gworksheet, st.session_state.rapportini)
+            scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot)
         st.session_state.modifica_idx = None
         st.success("Rapportino modificato!")
         st.rerun()
@@ -689,15 +722,17 @@ elif menu == "Nuovo Rapportino":
             ore_val = float(ore) if ore is not None else 0.0
             spese_val = float(spese) if spese is not None else 0.0
             nuovo = {
+                "id": str(uuid.uuid4()),
                 "cliente": cliente, "cantiere": cantiere, "data": str(data),
                 "km": km_val, "ore": ore_val, "spese": spese_val,
                 "nota_spesa": nota_spesa, "note": note
             }
+            old_snapshot = [dict(x) for x in st.session_state.rapportini]
             st.session_state.rapportini.append(nuovo)
             st.session_state.ultimo_salvataggio_signature = firma_corrente
             if conn_disponibile and gworksheet is not None:
                 try:
-                    if scrivi_su_google_sheets(gworksheet, st.session_state.rapportini):
+                    if scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot):
                         st.success("✅ Rapportino salvato permanentemente su Google Fogli!")
                     else:
                         st.error("Errore durante il salvataggio su Google Sheets.")

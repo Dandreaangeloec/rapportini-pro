@@ -22,3 +22,17 @@ _fix.py
 # Credenziali Google
 credentials.json
 sheet_url.txt
+
+# Qualsiasi file di service account Google (chiavi private) - NON vanno MAI su GitHub
+*service-account*.json
+*service_account*.json
+rapportini-app-*.json
+.streamlit/*.json
+credentials_*.json
+
+# Log di debug locali (avvio Streamlit)
+*.log
+*.log.err
+streamlit_run.log
+streamlit_run.log.err
+diag.txt

@@ -149,13 +149,47 @@ def connetti_google_sheets():
         except Exception:
             pass
         return None, None
-    ws = _get_or_create_ws(sh, SHEET_WORKSHEET_NAME, ["data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
+    ws = _get_or_create_ws(sh, SHEET_WORKSHEET_NAME, ["id","data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
+    if ws is not None:
+        # Migrazione: assicura che l'header contenga la colonna "id"
+        try:
+            riga0 = ws.row_values(1)
+            if not riga0 or str(riga0[0]).strip() != "id":
+                # Inserisce la colonna "id" come prima colonna se manca
+                ws.insert_cols(1)
+                ws.update("A1", "id")
+        except Exception:
+            pass  # se fallisce non è bloccante
     return gc, ws
 
 
 def leggi_da_google_sheets(ws):
     try:
-        return ws.get_all_records()
+        # Legge tutte le righe brute per evitare l'errore "duplicate headers"
+        # dovuto a intestazioni vuote/duplicate nel foglio
+        valori = ws.get_all_values()
+        if not valori or len(valori) < 1:
+            return []
+        headers = [h.strip() for h in valori[0]]
+        records = []
+        for row in valori[1:]:
+            if all(cell.strip() == "" for cell in row):
+                continue  # salta righe vuote
+            # Allunga la row se più corta degli headers
+            while len(row) < len(headers):
+                row.append("")
+            record = {}
+            for i, h in enumerate(headers):
+                if h:  # solo header non vuoti
+                    record[h] = row[i]
+            if record:
+                records.append(record)
+        # IMPORTANTE: assegna un ID se manca (migrazione dati esistenti)
+        import uuid
+        for rec in records:
+            if not str(rec.get("id", "")).strip():
+                rec["id"] = str(uuid.uuid4())
+        return records
     except Exception as e:
         try:
             st.error(f"Errore lettura: {e}")
@@ -164,24 +198,158 @@ def leggi_da_google_sheets(ws):
         return []
 
 
-def scrivi_su_google_sheets(ws, rapportini):
+def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
+    """
+    Scrivi i rapportini su Google Sheets con strategia MERGE sicura (no clear+rewrite).
+
+    A differenza della vecchia versione che faceva ws.clear() + riscrittura
+    (che causava perdita dati in caso di accessi concorrenti), questa funzione:
+
+    1. Legge i dati ATTUALE dal foglio (per non sovrascrivere righe di altri)
+    2. Assegna un campo 'id' univoco a ogni rapportino
+    3. Aggiunge SOLO i record con id non ancora presente (append in fondo)
+    4. Aggiorna in-place i record con id già presente
+    5. Adotta (migra) i vecchi record SENZA id matchandoli per contenuto
+       (data|cliente|cantiere) così non vengono duplicati e acquistano un id
+    6. Elimina SOLO i record rimossi esplicitamente dall'utente
+    """
+    import uuid
+
+    HEADERS = ["id", "data", "cliente", "cantiere", "km", "ore", "spese", "nota_spesa", "note"]
+
     try:
-        if not rapportini:
-            ws.clear()
-            ws.append_row(["data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
-            return True
-        df = pd.DataFrame(rapportini)
-        cols = ["data","cliente","cantiere","km","ore","spese","nota_spesa","note"]
-        pres = [c for c in cols if c in df.columns]
-        if not pres:
-            return False
-        df = df[pres]
-        ws.clear()
-        ws.append_row(pres)
-        for _, row in df.iterrows():
-            if all(pd.isna(v) or str(v).strip()=="" for v in row):
-                continue
-            ws.append_row(["" if pd.isna(row[c]) else str(row[c]) for c in pres])
+        # 0. Assicura che la colonna "id" esista come PRIMA colonna (A).
+        #    Se il foglio è legacy (senza colonna id), la inserisce.
+        try:
+            riga0 = ws.row_values(1)
+            if not riga0 or str(riga0[0]).strip() != "id":
+                ws.insert_cols(1)
+                ws.update("A1", "id")
+        except Exception:
+            pass  # non bloccante
+
+        # 1. Leggi lo stato ATTUALE del foglio
+        try:
+            valori = ws.get_all_values()
+        except Exception:
+            valori = []
+
+        sheet_rows = {}          # id -> dict di riga esistente
+        sheet_row_by_index = {}  # id -> indice riga (1-based, headers=riga 1)
+        legacy_rows = {}         # firma_contenuto -> (indice, dict) per righe SENZA id
+        legacy_ids_by_row = {}   # indice -> firma (per tracciamento adozione)
+
+        if valori and len(valori) > 0:
+            h = [x.strip() for x in valori[0]]
+            for idx, row in enumerate(valori[1:], start=2):  # riga 2 = prima dati
+                if all(c.strip() == "" for c in row):
+                    continue
+                while len(row) < len(h):
+                    row.append("")
+                d = {}
+                for i, hh in enumerate(h):
+                    if hh:
+                        d[hh] = row[i]
+                rid = str(d.get("id", "")).strip()
+                if rid:
+                    sheet_rows[rid] = d
+                    sheet_row_by_index[rid] = idx
+                else:
+                    # Riga legacy senza id → matchnala per contenuto
+                    firma = "|".join([
+                        str(d.get("data", "")).strip(),
+                        str(d.get("cliente", "")).strip(),
+                        str(d.get("cantiere", "")).strip()
+                    ])
+                    if firma:
+                        legacy_rows[firma] = (idx, d)
+                        legacy_ids_by_row[idx] = firma
+
+        # 2. Prepara liste di operazioni
+        da_aggiungere = []            # (dict) → append in fondo
+        da_aggiornare = []            # (indice_riga, dict) → update in-place
+        id_presenti_in_memoria = []
+        firme_in_memoria = set()      # firme dei record in memoria (per adoption)
+
+        for r in rapportini:
+            rec = dict(r)
+            rid = str(rec.get("id", "")).strip()
+            firma = "|".join([
+                str(rec.get("data", "")).strip(),
+                str(rec.get("cliente", "")).strip(),
+                str(rec.get("cantiere", "")).strip()
+            ])
+            if firma:
+                firme_in_memoria.add(firma)
+
+            if rid:
+                id_presenti_in_memoria.append(rid)
+                if rid in sheet_rows:
+                    # Id già presente nel foglio → aggiorna in-place
+                    da_aggiornare.append((sheet_row_by_index[rid], rec))
+                elif firma and firma in legacy_rows:
+                    # Id assegnato in memoria MA riga ancora legacy (colonna id
+                    # vuota nel foglio, migrazione) → adotta la riga legacy
+                    # riempiendola con l'id invece di duplicarla.
+                    idx_legacy, _ = legacy_rows[firma]
+                    da_aggiornare.append((idx_legacy, rec))
+                else:
+                    # Id presente ma nessuna riga legacy corrispondente → nuovo
+                    da_aggiungere.append(rec)
+            else:
+                # Record senza id: prova ADOPTION su una riga legacy
+                if firma and firma in legacy_rows:
+                    idx_legacy, _ = legacy_rows[firma]
+                    # Assegna un id univoco al record e aggiorna in-place
+                    nuovo_id = str(uuid.uuid4())
+                    rec["id"] = nuovo_id
+                    r["id"] = nuovo_id          # salva in session_state
+                    da_aggiornare.append((idx_legacy, rec))
+                else:
+                    # Nessuna riga legacy corrispondente → nuovo record
+                    nuovo_id = str(uuid.uuid4())
+                    rec["id"] = nuovo_id
+                    r["id"] = nuovo_id          # salva in session_state
+                    da_aggiungere.append(rec)
+
+        # 3. Determina i record da ELIMINARE (solo rimozioni esplicite)
+        da_eliminare = []
+        if old_rapportini is not None:
+            old_ids = {str(x.get("id", "")).strip() for x in old_rapportini if str(x.get("id", "")).strip()}
+            nuovi_ids = set(id_presenti_in_memoria)
+            for rid in old_ids:
+                if rid not in nuovi_ids and rid in sheet_rows:
+                    da_eliminare.append(sheet_row_by_index[rid])
+
+        # 4. Applica le operazioni sul foglio
+        # 4a. Append nuovi record (in fondo — non tocca righe esistenti)
+        for rec in da_aggiungere:
+            row_to_write = []
+            for c in HEADERS:
+                v = rec.get(c, "")
+                if v is None:
+                    v = ""
+                if isinstance(v, float) and pd.isna(v):
+                    v = ""
+                row_to_write.append(str(v))
+            ws.append_row(row_to_write)
+
+        # 4b. Update record esistenti (in-place, riga per riga)
+        for row_idx, rec in da_aggiornare:
+            row_to_write = []
+            for c in HEADERS:
+                v = rec.get(c, "")
+                if v is None:
+                    v = ""
+                if isinstance(v, float) and pd.isna(v):
+                    v = ""
+                row_to_write.append(str(v))
+            ws.update(values=[row_to_write], range_name=f"A{row_idx}:I{row_idx}")
+
+        # 4c. Elimina record rimossi esplicitamente (in ordine decrescente)
+        for row_idx in sorted(da_eliminare, reverse=True):
+            ws.delete_rows(row_idx)
+
         return True
     except Exception as e:
         try:
@@ -204,7 +372,22 @@ def leggi_clienti_da_gsheets():
         ws = _get_or_create_ws(sh, SHEET_WORKSHEET_CLIENTI, ["nome", "prezzo_ora", "prezzo_km"])
         if ws is None:
             return {}
-        records = ws.get_all_records()
+        valori = ws.get_all_values()
+        if not valori or len(valori) < 1:
+            return {}
+        headers = [h.strip() for h in valori[0]]
+        records = []
+        for row in valori[1:]:
+            if all(cell.strip() == "" for cell in row):
+                continue
+            while len(row) < len(headers):
+                row.append("")
+            record = {}
+            for i, h in enumerate(headers):
+                if h:
+                    record[h] = row[i]
+            if record:
+                records.append(record)
         result = {}
         for r in records:
             nome = str(r.get("nome", "")).strip()
