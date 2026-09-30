@@ -2,7 +2,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime
-from streamlit_drawable_canvas import st_canvas
+try:
+    from streamlit_drawable_canvas import st_canvas
+    CANVAS_AVAILABLE = True
+except ImportError:
+    CANVAS_AVAILABLE = False
+    st_canvas = None
 import io
 import os
 import base64
@@ -645,7 +650,11 @@ elif menu == "Nuovo Rapportino":
         nota_spesa = st.text_input("Es: carburante", placeholder="Causale spesa", key="nr_nota_spesa")
     note = st.text_area("Note / Descrizione Intervento", placeholder="Inserisci qui i dettagli dei lavori svolti...", key="nr_note")
     st.write("Firma del cliente")
-    canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000000", background_color="#ffffff", height=150, update_streamlit=True, key=f"canvas_{st.session_state.nr_canvas_key}")
+    if CANVAS_AVAILABLE and st_canvas is not None:
+        canvas_result = st_canvas(fill_color="rgba(255, 255, 255, 0)", stroke_width=2, stroke_color="#000000", background_color="#ffffff", height=150, update_streamlit=True, key=f"canvas_{st.session_state.nr_canvas_key}")
+    else:
+        canvas_result = None
+        st.caption("✍️ Firma non disponibile (componente canvas non installato).")
     
     # Stato per evitare salvataggi duplicati: il bottone resta disabilitato
     # finché l'utente non modifica un campo del form.

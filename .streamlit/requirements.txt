@@ -3,3 +3,5 @@ pandas
 streamlit-drawable-canvas
 fpdf2
 st-gsheets-connection
+gspread
+google-auth

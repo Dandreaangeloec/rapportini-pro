@@ -122,14 +122,14 @@ def _get_or_create_ws(sh, title, header):
 def connetti_google_sheets():
     """Apre il worksheet Rapportini e restituisce (client, worksheet).
 
-    La connessione e il worksheet sono memorizzati con @st.cache_resource /
-    @st.cache_data così non vengono ricreati ad ogni interazione dell'utente.
+    Il CLIENT gspread è condiviso e messo in cache (autenticazione costosa),
+    mentre il worksheet viene risolto ad ogni chiamata: condividere un oggetto
+    Worksheet tra sessioni/thread può causare errori su Streamlit Cloud.
     """
-    return _connetti_google_sheets_cached(get_sheet_url())
+    return _connetti_google_sheets_ws(get_sheet_url(), SHEET_WORKSHEET_NAME)
 
 
-@st.cache_resource(show_spinner=False)
-def _connetti_google_sheets_cached(_sheet_key):
+def _connetti_google_sheets_ws(_sheet_key, _ws_title):
     gc, sh = _apri_foglio()
     if sh is None:
         try:
@@ -137,7 +137,7 @@ def _connetti_google_sheets_cached(_sheet_key):
         except Exception:
             pass
         return None, None
-    ws = _get_or_create_ws(sh, SHEET_WORKSHEET_NAME, ["id","data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
+    ws = _get_ws_sicuro(sh, _ws_title)
     if ws is not None:
         # Migrazione: assicura che l'header contenga la colonna "id" (solo 1 volta)
         try:
@@ -150,43 +150,76 @@ def _connetti_google_sheets_cached(_sheet_key):
     return gc, ws
 
 
-def _apri_foglio():
-    """Apre il foglio Google (gc, sh) o ritorna (None, None).
-
-    La connessione (client gspread + spreadsheet) viene messa in cache a livello
-    di processo con @st.cache_resource: creare l'oggetto ogni rerun comportava
-    una nuova autenticazione e una chiamata di rete che rallentava tutta l'app.
-    Il valore di ritorno NON è serializzato, quindi è adatto a oggetti di rete.
-    """
-    return _apri_foglio_cached()
-
-
 @st.cache_resource(show_spinner=False)
-def _apri_foglio_cached():
+def _client_google():
+    """Autentica e ritorna il CLIENT gspread (riutilizzabile, sicuro da condividere)."""
     sa = get_service_account_dict()
     if sa is None:
-        return None, None
+        return None
     try:
         creds = __import__("google.oauth2.service_account", fromlist=["Credentials"]).Credentials.from_service_account_info(sa, scopes=SCOPES)
-        gc = gspread.authorize(creds)
-        url = get_sheet_url()
-        if url is None:
-            return gc, None
-        sh = gc.open_by_url(url)
-        return gc, sh
+        return gspread.authorize(creds)
     except Exception as e:
         try:
             st.sidebar.info(f"ℹ️ Google Sheets offline: {e}")
         except Exception:
             pass
-        return None, None
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def _spreadsheet_google():
+    """Apre lo spreadsheet (una sola volta) e lo condivide."""
+    gc = _client_google()
+    if gc is None:
+        return None
+    try:
+        url = get_sheet_url()
+        if url is None:
+            return None
+        return gc.open_by_url(url)
+    except Exception as e:
+        try:
+            st.sidebar.info(f"ℹ️ Google Sheets offline: {e}")
+        except Exception:
+            pass
+        return None
+
+
+def _get_ws_sicuro(sh, title):
+    """Ritorna il worksheet, creandolo se non esiste (senza cache condivisa)."""
+    return _get_or_create_ws(sh, title, ["id","data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
+
+
+def _apri_foglio():
+    """Apre/ritorna la connessione Google (client, spreadsheet) o (None, None).
+
+    La connessione (client + spreadsheet) è in cache a livello di processo con
+    @st.cache_resource: crearli ad ogni rerun comportava una nuova autenticazione
+    e una chiamata di rete che rallentava tutta l'app.
+    """
+    gc = _client_google()
+    sh = _spreadsheet_google()
+    if sh is None:
+        return gc, None
+    return gc, sh
+
+
+def _apri_foglio_cached():
+    """Alias retro-compatibile di _apri_foglio (usato dall'invalidazione cache)."""
+    return _apri_foglio()
+
 
 
 def _invalida_cache_google():
     """Svuota le cache della connessione e delle letture dopo una scrittura,
     così al prossimo rerun i dati vengono riletti aggiornati dal foglio."""
     try:
-        _apri_foglio_cached.clear()
+        _client_google.clear()
+    except Exception:
+        pass
+    try:
+        _spreadsheet_google.clear()
     except Exception:
         pass
     try:
