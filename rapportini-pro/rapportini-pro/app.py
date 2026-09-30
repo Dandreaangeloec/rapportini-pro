@@ -270,7 +270,15 @@ if st.session_state.elimina_idx is not None:
             old_snapshot = [dict(x) for x in st.session_state.rapportini]
             st.session_state.rapportini.pop(idx)
             if conn_disponibile and gworksheet is not None:
-                scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot)
+                ok = scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot)
+                if not ok:
+                    st.error("❌ Errore nell'eliminazione su Google Sheets. Il rapportino NON è stato eliminato dal foglio.")
+                    st.stop()
+                # Invalida la cache di lettura e ricarica dal foglio
+                invalida_cache_google()
+                dati_freschi = leggi_da_google_sheets(gworksheet)
+                if dati_freschi:
+                    st.session_state.rapportini = dati_freschi
             st.session_state.elimina_idx = None
             st.success("Rapportino eliminato!")
             st.rerun()
@@ -333,7 +341,16 @@ if st.session_state.modifica_idx is not None:
         }
         st.session_state.rapportini[idx] = nuovo_dett
         if conn_disponibile and gworksheet is not None:
-            scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot)
+            ok = scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot)
+            if not ok:
+                st.error("❌ Errore nel salvataggio su Google Sheets. Le modifiche NON sono state salvate.")
+                st.stop()
+            # Invalida la cache di lettura (fa _leggi_valori_cached.clear())
+            # così al prossimo rerun i dati vengono riletti freschi dal foglio
+            invalida_cache_google()
+            dati_freschi = leggi_da_google_sheets(gworksheet)
+            if dati_freschi:
+                st.session_state.rapportini = dati_freschi
         st.session_state.modifica_idx = None
         st.success("Rapportino modificato!")
         st.rerun()
@@ -727,6 +744,11 @@ elif menu == "Nuovo Rapportino":
                 try:
                     if scrivi_su_google_sheets(gworksheet, st.session_state.rapportini, old_rapportini=old_snapshot):
                         st.success("✅ Rapportino salvato permanentemente su Google Fogli!")
+                        # Invalida cache e ricarica dal foglio per sync perfetta
+                        invalida_cache_google()
+                        dati_freschi = leggi_da_google_sheets(gworksheet)
+                        if dati_freschi:
+                            st.session_state.rapportini = dati_freschi
                     else:
                         st.error("Errore durante il salvataggio su Google Sheets.")
                 except Exception as e:

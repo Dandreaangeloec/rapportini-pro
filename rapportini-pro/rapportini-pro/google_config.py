@@ -140,9 +140,14 @@ def _connetti_google_sheets_ws(_sheet_key, _ws_title):
     ws = _get_ws_sicuro(sh, _ws_title)
     if ws is not None:
         # Migrazione: assicura che l'header contenga la colonna "id" (solo 1 volta)
+        # FIX: stesso controllo rigoroso di scrivi_su_google_sheets per evitare
+        # insert_cols ripetuti che aggiungono colonne vuote.
         try:
             riga0 = ws.row_values(1)
-            if not riga0 or str(riga0[0]).strip() != "id":
+            riga0_clean = [str(c).strip().lower() for c in riga0]
+            id_gia_presente = "id" in riga0_clean
+            a1_vuoto_o_diverso = (not riga0) or riga0_clean[0] != "id"
+            if a1_vuoto_o_diverso and not id_gia_presente:
                 ws.insert_cols(1)
                 ws.update("A1", "id")
         except Exception:
@@ -276,11 +281,11 @@ def leggi_da_google_sheets(ws):
                     record[h] = row[i]
             if record:
                 records.append(record)
-        # IMPORTANTE: assegna un ID se manca (migrazione dati esistenti)
-        import uuid
-        for rec in records:
-            if not str(rec.get("id", "")).strip():
-                rec["id"] = str(uuid.uuid4())
+        # FIX: NON generare id qui. Prima veniva generato uuid ad ogni lettura
+        # per le righe legacy senza id, causando DUPLICATI a ogni modifica
+        # (l'id generato non matchava mai le righe del foglio -> append nuovo).
+        # L'id viene assegnato solo in scrivi_su_google_sheets() durante
+        # l'adoption o la creazione.
         return records
     except Exception as e:
         try:
@@ -311,14 +316,23 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
 
     try:
         # 0. Assicura che la colonna "id" esista come PRIMA colonna (A).
-        #    Se il foglio è legacy (senza colonna id), la inserisce.
+        #    FIX: controllo rigoroso — inserisci SOLO se A1 è vuoto o non "id",
+        #    e SOLO se "id" non è già presente in nessun'altra cella della riga 1.
+        #    Prima: se riga0 era vuota o c'era spazio -> insert_cols ad ogni scrittura.
         try:
             riga0 = ws.row_values(1)
-            if not riga0 or str(riga0[0]).strip() != "id":
+            riga0_clean = [str(c).strip().lower() for c in riga0]
+            id_gia_presente = "id" in riga0_clean
+            a1_vuoto_o_diverso = (not riga0) or riga0_clean[0] != "id"
+            if a1_vuoto_o_diverso and not id_gia_presente:
                 ws.insert_cols(1)
                 ws.update("A1", "id")
-        except Exception:
-            pass  # non bloccante
+        except Exception as e:
+            # Non bloccante, ma log visibile in debug
+            try:
+                st.sidebar.caption(f"⚠️ Migrazione header id: {e}")
+            except Exception:
+                pass
 
         # 1. Leggi lo stato ATTUALE del foglio
         try:
@@ -433,6 +447,18 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
 
         # 4b. Update record esistenti raggruppando le righe contigue
         #     (una chiamata per blocco invece di una per riga)
+        #     FIX: calcola la lettera dell'ultima colonna da len(HEADERS)
+        #     invece di hardcoded "I" (che presupponeva 9 colonne)
+        def _col_letter(n):
+            """Converte numero colonna 1-based in lettera (1=A, 27=AA, ...)."""
+            letters = ""
+            while n > 0:
+                n, rem = divmod(n - 1, 26)
+                letters = chr(65 + rem) + letters
+            return letters
+
+        ultima_col = _col_letter(len(HEADERS))
+
         if da_aggiornare:
             da_aggiornare.sort(key=lambda x: x[0])
             blocco_inizio = None
@@ -442,7 +468,7 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
             def _flush_blocco(inizio, righe, fine):
                 if not righe:
                     return
-                ws.update(values=righe, range_name=f"A{inizio}:I{fine}")
+                ws.update(values=righe, range_name=f"A{inizio}:{ultima_col}{fine}")
 
             for row_idx, rec in da_aggiornare:
                 if blocco_inizio is None:
