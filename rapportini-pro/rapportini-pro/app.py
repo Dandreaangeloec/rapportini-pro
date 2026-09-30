@@ -225,6 +225,34 @@ except Exception:
             }
         ]
 
+# --- HELPER DI CONVERSIONE SICURA (definiti PRIMA della modale di modifica) ---
+def _num(val, default=0.0):
+    """Converte in float in modo sicuro: stringhe vuote, None, 'nan', '-', ecc.
+    restituiscono il valore di default invece di lanciare ValueError.
+    Anche infinito/NaN nativi vengono ricondotti al default."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return float(val)
+    if isinstance(val, (int, float)):
+        if val != val or val in (float("inf"), float("-inf")):
+            return default  # NaN o infinito
+        return float(val)
+    s = str(val).strip()
+    if s == "" or s.lower() == "nan" or s == "-":
+        return default
+    try:
+        f = float(s)
+    except (ValueError, TypeError):
+        return default
+    if f != f or f in (float("inf"), float("-inf")):
+        return default
+    return f
+
+def _int(val, default=0):
+    """Come _num ma ritorna intero (utile per i km)."""
+    return int(_num(val, float(default)))
+
 # --- STATI PER MODIFICA/ELIMINAZIONE ---
 if "modifica_idx" not in st.session_state:
     st.session_state.modifica_idx = None
@@ -276,9 +304,16 @@ if st.session_state.modifica_idx is not None:
         )
         cantiere = st.text_input("Cantiere", value=r.get("cantiere",""))
         data = st.date_input("Data", value=datetime.strptime(r.get("data","2026-01-01"), "%Y-%m-%d") if r.get("data") else datetime.now())
-        km = st.number_input("Km", min_value=0, value=_int(r.get("km",0)))
-        ore = st.number_input("Ore", min_value=0.0, value=_num(r.get("ore",0.0)), step=0.5)
-        spese = st.number_input("Spese (€)", min_value=0.0, value=_num(r.get("spese",0.0)), step=0.5)
+        # Limita km al range sicuro per Streamlit (JS: max 2^53-1) e >= min_value
+        _km_val = _int(r.get("km", 0))
+        _km_val = max(0, min(_km_val, (1 << 53) - 1))
+        km = st.number_input("Km", min_value=0, value=_km_val)
+        _ore_val = _num(r.get("ore", 0.0))
+        _ore_val = max(0.0, min(_ore_val, (1 << 53) - 1))
+        ore = st.number_input("Ore", min_value=0.0, value=_ore_val, step=0.5)
+        _spese_val = _num(r.get("spese", 0.0))
+        _spese_val = max(0.0, min(_spese_val, (1 << 53) - 1))
+        spese = st.number_input("Spese (€)", min_value=0.0, value=_spese_val, step=0.5)
         nota_spesa = st.text_input("Nota spesa", value=r.get("nota_spesa",""))
         note = st.text_area("Note", value=r.get("note",""))
         col_s, col_c = st.columns(2)
@@ -328,23 +363,6 @@ def calcola_totale_rapportino(r):
     except (ValueError, TypeError):
         ore, km, spese = 0.0, 0, 0.0
     return (ore * cli_info["prezzo_ora"]) + (km * cli_info["prezzo_km"]) + spese
-
-def _num(val, default=0.0):
-    """Converte in float in modo sicuro: stringhe vuote, None, 'nan', '-', ecc.
-    restituiscono il valore di default invece di lanciare ValueError."""
-    if val is None:
-        return default
-    s = str(val).strip()
-    if s == "" or s.lower() == "nan" or s == "-":
-        return default
-    try:
-        return float(s)
-    except (ValueError, TypeError):
-        return default
-
-def _int(val, default=0):
-    """Come _num ma ritorna intero (utile per i km)."""
-    return int(_num(val, float(default)))
 
 def formatta_data(data_str):
     """Converte data da formato ISO (YYYY-MM-DD) a formato italiano (dd/mm/YYYY)."""
