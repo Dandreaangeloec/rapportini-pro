@@ -7,7 +7,7 @@ import io
 import os
 import base64
 import uuid
-from google_config import connetti_google_sheets, leggi_da_google_sheets, scrivi_su_google_sheets, leggi_clienti_da_gsheets, scrivi_clienti_su_gsheets
+from google_config import connetti_google_sheets, leggi_da_google_sheets, scrivi_su_google_sheets, leggi_clienti_da_gsheets, scrivi_clienti_su_gsheets, invalida_cache_google
 
 # Prova a caricare FPDF in modo robusto
 try:
@@ -532,68 +532,17 @@ if menu == "Rapportini Aziendali":
     with col2: st.markdown(f'<div class="card"><span class="stat-val">🕒 {tot_ore} ore</span><br><span class="stat-lbl">Tempo Totale</span></div>', unsafe_allow_html=True)
     with col3: st.markdown(f'<div class="card"><span class="stat-val">🚀 {tot_km} km</span><br><span class="stat-lbl">Distanza Totale</span></div>', unsafe_allow_html=True)
     
-    # Stato per il mese selezionato
-    if "mese_selezionato" not in st.session_state:
-        st.session_state.mese_selezionato = None
-    
-    # Raccogli i mesi presenti nei rapportini
-    mesi_presenti = set()
-    for r in st.session_state.rapportini:
-        data_str = str(r.get("data", ""))
-        if "-" in data_str:
-            mm = data_str.split("-")[1]
-            for nome_mese, codice in MESI_DICT.items():
-                if codice == mm:
-                    mesi_presenti.add(nome_mese)
-                    break
-    
-    # Pulsanti mensili
-    st.subheader("📆 Rapportini per mese")
+    # Elenco completo dei rapportini (i pulsanti di filtro per mese sono stati rimossi)
     if not st.session_state.rapportini:
         st.info("Nessun rapportino salvato.")
     else:
-        # Griglia pulsanti mese: 4 colonne
-        mesi_ordinati = ["Gennaio","Febbraio","Marzo","Aprile","Maggio","Giugno",
-                         "Luglio","Agosto","Settembre","Ottobre","Novembre","Dicembre"]
-        cols = st.columns(4)
-        for i, nome_mese in enumerate(mesi_ordinati):
-            with cols[i % 4]:
-                conteggio = sum(1 for r in st.session_state.rapportini 
-                                if str(r.get("data","")).split("-")[1] == MESI_DICT[nome_mese])
-                if conteggio > 0:
-                    label = f"{nome_mese[:3]}\n({conteggio})"
-                    if st.session_state.mese_selezionato == nome_mese:
-                        st.button(label, key=f"mese_{nome_mese}", use_container_width=True,
-                                  type="primary")
-                    else:
-                        if st.button(label, key=f"mese_{nome_mese}", use_container_width=True):
-                            st.session_state.mese_selezionato = nome_mese
-                            st.rerun()
-                else:
-                    st.button(f"{nome_mese[:3]}\n(0)", key=f"mese_{nome_mese}", use_container_width=True, disabled=True)
-        
-        # Bottone per deselezionare il mese
-        if st.session_state.mese_selezionato is not None:
-            if st.button("❌ Mostra tutti", use_container_width=True):
-                st.session_state.mese_selezionato = None
-                st.rerun()
-        
-        st.markdown("---")
-        
-        # Filtra i rapportini in base al mese selezionato
-        if st.session_state.mese_selezionato is not None:
-            codice_mese = MESI_DICT[st.session_state.mese_selezionato]
-            rapportini_filtrati = [r for r in st.session_state.rapportini 
-                                   if str(r.get("data","")).split("-")[1] == codice_mese]
-            st.subheader(f"📋 {st.session_state.mese_selezionato} ({len(rapportini_filtrati)} rapportini)")
-        else:
-            rapportini_filtrati = list(st.session_state.rapportini)
-            st.subheader(f"📋 Tutti i rapportini ({len(rapportini_filtrati)})")
-        
-        # Mostra i rapportini filtrati
-        for idx, r in enumerate(reversed(rapportini_filtrati)):
-            # Calcola indice reale in st.session_state.rapportini
-            idx_reale = st.session_state.rapportini.index(r)
+        # Mostra tutti i rapportini (più recenti in alto).
+        # Si itera sull'indice reale, evitando la ricerca O(n²) con .index()
+        # che rallentava la dashboard con molti rapportini.
+        rapportini_ordinati = list(enumerate(st.session_state.rapportini))
+        st.subheader(f"📋 Tutti i rapportini ({len(rapportini_ordinati)})")
+
+        for idx_reale, r in reversed(rapportini_ordinati):
             with st.container():
                 st.markdown(f"""
                 <div class="card">

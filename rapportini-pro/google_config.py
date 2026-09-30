@@ -104,8 +104,65 @@ def get_sheet_url():
     return _FALLBACK_SHEET_URL
 
 
+def _get_or_create_ws(sh, title, header):
+    """Restituisce il worksheet col nome indicato, creandolo se non esiste."""
+    if sh is None:
+        return None
+    try:
+        try:
+            return sh.worksheet(title)
+        except gspread.exceptions.WorksheetNotFound:
+            ws = sh.add_worksheet(title=title, rows=1000, cols=20)
+            ws.append_row(header)
+            return ws
+    except Exception:
+        return None
+
+
+def connetti_google_sheets():
+    """Apre il worksheet Rapportini e restituisce (client, worksheet).
+
+    La connessione e il worksheet sono memorizzati con @st.cache_resource /
+    @st.cache_data così non vengono ricreati ad ogni interazione dell'utente.
+    """
+    return _connetti_google_sheets_cached(get_sheet_url())
+
+
+@st.cache_resource(show_spinner=False)
+def _connetti_google_sheets_cached(_sheet_key):
+    gc, sh = _apri_foglio()
+    if sh is None:
+        try:
+            st.sidebar.info("ℹ️ Google Sheets non configurato")
+        except Exception:
+            pass
+        return None, None
+    ws = _get_or_create_ws(sh, SHEET_WORKSHEET_NAME, ["id","data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
+    if ws is not None:
+        # Migrazione: assicura che l'header contenga la colonna "id" (solo 1 volta)
+        try:
+            riga0 = ws.row_values(1)
+            if not riga0 or str(riga0[0]).strip() != "id":
+                ws.insert_cols(1)
+                ws.update("A1", "id")
+        except Exception:
+            pass  # se fallisce non è bloccante
+    return gc, ws
+
+
 def _apri_foglio():
-    """Apre il foglio Google (gc, sh) o ritorna (None, None)."""
+    """Apre il foglio Google (gc, sh) o ritorna (None, None).
+
+    La connessione (client gspread + spreadsheet) viene messa in cache a livello
+    di processo con @st.cache_resource: creare l'oggetto ogni rerun comportava
+    una nuova autenticazione e una chiamata di rete che rallentava tutta l'app.
+    Il valore di ritorno NON è serializzato, quindi è adatto a oggetti di rete.
+    """
+    return _apri_foglio_cached()
+
+
+@st.cache_resource(show_spinner=False)
+def _apri_foglio_cached():
     sa = get_service_account_dict()
     if sa is None:
         return None, None
@@ -125,49 +182,51 @@ def _apri_foglio():
         return None, None
 
 
-def _get_or_create_ws(sh, title, header):
-    """Restituisce il worksheet col nome indicato, creandolo se non esiste."""
-    if sh is None:
-        return None
+def _invalida_cache_google():
+    """Svuota le cache della connessione e delle letture dopo una scrittura,
+    così al prossimo rerun i dati vengono riletti aggiornati dal foglio."""
     try:
-        try:
-            return sh.worksheet(title)
-        except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title=title, rows=1000, cols=20)
-            ws.append_row(header)
-            return ws
+        _apri_foglio_cached.clear()
     except Exception:
-        return None
+        pass
+    try:
+        _leggi_valori_cached.clear()
+    except Exception:
+        pass
 
 
-def connetti_google_sheets():
-    """Apre il worksheet Rapportini (per compatibilita con app.py)."""
+# Alias pubblico: usato da app.py dopo le scritture per forzare dati freschi.
+invalida_cache_google = _invalida_cache_google
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _leggi_valori_cached(ws_title, sheet_key):
+    """Legge TUTTE le righe di un worksheet con cache breve (60s).
+
+    `ws_title` serve solo a distinguere i worksheet nella chiave di cache;
+    `sheet_key` è l'id del foglio per invalidare la cache se cambia il foglio.
+    """
     gc, sh = _apri_foglio()
     if sh is None:
-        try:
-            st.sidebar.info("ℹ️ Google Sheets non configurato")
-        except Exception:
-            pass
-        return None, None
-    ws = _get_or_create_ws(sh, SHEET_WORKSHEET_NAME, ["id","data","cliente","cantiere","km","ore","spese","nota_spesa","note"])
-    if ws is not None:
-        # Migrazione: assicura che l'header contenga la colonna "id"
-        try:
-            riga0 = ws.row_values(1)
-            if not riga0 or str(riga0[0]).strip() != "id":
-                # Inserisce la colonna "id" come prima colonna se manca
-                ws.insert_cols(1)
-                ws.update("A1", "id")
-        except Exception:
-            pass  # se fallisce non è bloccante
-    return gc, ws
+        return []
+    try:
+        ws = sh.worksheet(ws_title)
+    except Exception:
+        return []
+    try:
+        return ws.get_all_values()
+    except Exception:
+        return []
 
 
 def leggi_da_google_sheets(ws):
     try:
-        # Legge tutte le righe brute per evitare l'errore "duplicate headers"
-        # dovuto a intestazioni vuote/duplicate nel foglio
-        valori = ws.get_all_values()
+        # Legge tutte le righe (con cache breve per non rifare la chiamata
+        # di rete ad ogni rerun). Fallback diretto se la cache non è usabile.
+        try:
+            valori = _leggi_valori_cached(ws.title, get_sheet_url())
+        except Exception:
+            valori = ws.get_all_values()
         if not valori or len(valori) < 1:
             return []
         headers = [h.strip() for h in valori[0]]
@@ -321,9 +380,9 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
                 if rid not in nuovi_ids and rid in sheet_rows:
                     da_eliminare.append(sheet_row_by_index[rid])
 
-        # 4. Applica le operazioni sul foglio
-        # 4a. Append nuovi record (in fondo — non tocca righe esistenti)
-        for rec in da_aggiungere:
+        # 4. Applica le operazioni sul foglio (in BATCH: una sola chiamata API
+        #    per gruppo invece di una chiamata per riga → molto più veloce)
+        def _riga_per(rec):
             row_to_write = []
             for c in HEADERS:
                 v = rec.get(c, "")
@@ -332,23 +391,50 @@ def scrivi_su_google_sheets(ws, rapportini, old_rapportini=None):
                 if isinstance(v, float) and pd.isna(v):
                     v = ""
                 row_to_write.append(str(v))
-            ws.append_row(row_to_write)
+            return row_to_write
 
-        # 4b. Update record esistenti (in-place, riga per riga)
-        for row_idx, rec in da_aggiornare:
-            row_to_write = []
-            for c in HEADERS:
-                v = rec.get(c, "")
-                if v is None:
-                    v = ""
-                if isinstance(v, float) and pd.isna(v):
-                    v = ""
-                row_to_write.append(str(v))
-            ws.update(values=[row_to_write], range_name=f"A{row_idx}:I{row_idx}")
+        # 4a. Append nuovi record (una sola chiamata append_rows)
+        if da_aggiungere:
+            ws.append_rows([_riga_per(rec) for rec in da_aggiungere],
+                           value_input_option="USER_ENTERED")
+
+        # 4b. Update record esistenti raggruppando le righe contigue
+        #     (una chiamata per blocco invece di una per riga)
+        if da_aggiornare:
+            da_aggiornare.sort(key=lambda x: x[0])
+            blocco_inizio = None
+            blocco_righe = []
+            blocco_fine = None
+
+            def _flush_blocco(inizio, righe, fine):
+                if not righe:
+                    return
+                ws.update(values=righe, range_name=f"A{inizio}:I{fine}")
+
+            for row_idx, rec in da_aggiornare:
+                if blocco_inizio is None:
+                    blocco_inizio = row_idx
+                    blocco_fine = row_idx
+                    blocco_righe = [_riga_per(rec)]
+                elif row_idx == blocco_fine + 1:
+                    blocco_fine = row_idx
+                    blocco_righe.append(_riga_per(rec))
+                else:
+                    _flush_blocco(blocco_inizio, blocco_righe, blocco_fine)
+                    blocco_inizio = row_idx
+                    blocco_fine = row_idx
+                    blocco_righe = [_riga_per(rec)]
+            _flush_blocco(blocco_inizio, blocco_righe, blocco_fine)
 
         # 4c. Elimina record rimossi esplicitamente (in ordine decrescente)
         for row_idx in sorted(da_eliminare, reverse=True):
             ws.delete_rows(row_idx)
+
+        # 5. Invalida la cache di lettura: al prossimo rerun i dati saranno freschi
+        try:
+            _leggi_valori_cached.clear()
+        except Exception:
+            pass
 
         return True
     except Exception as e:
@@ -372,7 +458,11 @@ def leggi_clienti_da_gsheets():
         ws = _get_or_create_ws(sh, SHEET_WORKSHEET_CLIENTI, ["nome", "prezzo_ora", "prezzo_km"])
         if ws is None:
             return {}
-        valori = ws.get_all_values()
+        # Cache breve per non rifare la chiamata di rete ad ogni rerun
+        try:
+            valori = _leggi_valori_cached(ws.title, get_sheet_url())
+        except Exception:
+            valori = ws.get_all_values()
         if not valori or len(valori) < 1:
             return {}
         headers = [h.strip() for h in valori[0]]
@@ -412,7 +502,7 @@ def leggi_clienti_da_gsheets():
 
 
 def scrivi_clienti_su_gsheets(clienti_dict):
-    """Sovrascrive il foglio 'Clienti' con il dict passato."""
+    """Sovrascrive il foglio 'Clienti' con il dict passato (in un'unica chiamata)."""
     try:
         gc, sh = _apri_foglio()
         if sh is None:
@@ -420,10 +510,17 @@ def scrivi_clienti_su_gsheets(clienti_dict):
         ws = _get_or_create_ws(sh, SHEET_WORKSHEET_CLIENTI, ["nome", "prezzo_ora", "prezzo_km"])
         if ws is None:
             return False
-        ws.clear()
-        ws.append_row(["nome", "prezzo_ora", "prezzo_km"])
+        # Costruisce tutte le righe e le scrive in un'unica operazione
+        righe = [["nome", "prezzo_ora", "prezzo_km"]]
         for nome, info in clienti_dict.items():
-            ws.append_row([str(nome), str(info.get("prezzo_ora", 0)), str(info.get("prezzo_km", 0))])
+            righe.append([str(nome), str(info.get("prezzo_ora", 0)), str(info.get("prezzo_km", 0))])
+        ws.clear()
+        ws.update(values=righe, range_name="A1", value_input_option="USER_ENTERED")
+        # Invalida la cache di lettura per riflettere subito le modifiche
+        try:
+            _leggi_valori_cached.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         try:
