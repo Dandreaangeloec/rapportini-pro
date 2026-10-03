@@ -138,6 +138,25 @@ css_code = """
         margin-left: 6px;
         vertical-align: super;
     }
+    /* --- MENU A TENDINA: niente tastiera su mobile ---
+       I selectbox di Streamlit usano un input readonly come "trigger":
+       su alcuni browser mobile (Android/iOS) il tap su quell'input apre
+       comunque la tastiera virtuale. Queste regole rendono l'input non
+       editabile dalla tastiera, lasciando intatto il comportamento del
+       menu a tendina (l'elenco opzioni continua ad aprirsi normalmente). */
+    div[data-baseweb="select"],
+    div[data-baseweb="select"] * {
+        -webkit-user-select: none;
+        user-select: none;
+    }
+    div[data-baseweb="select"] input,
+    div[data-baseweb="select"] [role="combobox"],
+    div[data-baseweb="select"] [role="button"] {
+        inputmode: none !important;
+        caret-color: transparent !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+    }
     </style>
 """
 
@@ -572,6 +591,35 @@ st.markdown("""
     }, 1000);
 })();
 </script>
+<script>
+/* --- ANTI-TASTIERA SUI MENU A TENDINA (st.selectbox) ---
+   I selectbox di Streamlit usano un <input readonly> come trigger.
+   Su alcuni browser mobile quel campo fa comparire la tastiera virtuale
+   anche se il campo e' readonly. Qui forziamo inputmode="none" su ogni
+   input dentro i select (data-baseweb="select"), cosi' il tap apre solo
+   l'elenco delle opzioni e MAI la tastiera.
+   Usiamo un MutationObserver perche' Streamlit ridisegna i widget ad
+   ogni rerun: gli attributi applicati una volta andrebbero persi. */
+(function () {
+    function patchSelectboxInputs() {
+        var inputs = document.querySelectorAll('div[data-baseweb="select"] input');
+        inputs.forEach(function (el) {
+            if (el.getAttribute('inputmode') !== 'none') {
+                el.setAttribute('inputmode', 'none');
+            }
+            el.setAttribute('readonly', 'readonly');
+            // Evita il focus programmatico che apre la tastiera su iOS
+            if (!el.dataset.noKbBound) {
+                el.dataset.noKbBound = '1';
+                el.addEventListener('focus', function () { el.blur(); }, { passive: true });
+            }
+        });
+    }
+    patchSelectboxInputs();
+    var obs = new MutationObserver(function () { patchSelectboxInputs(); });
+    obs.observe(document.body, { childList: true, subtree: true });
+})();
+</script>
 """, unsafe_allow_html=True)
 
 if menu == "Rapportini Aziendali":
@@ -759,8 +807,10 @@ elif menu == "Nuovo Rapportino":
 
 elif menu == "Report Mensili e Clienti":
     st.title("Generazione Report Avanzati")
-    mese = st.selectbox("Seleziona Mese", list(MESI_DICT.keys()), index=4)
-    cliente_selezionato = st.selectbox("Seleziona Cliente", ["Tutti i clienti"] + list(st.session_state.clienti_dict.keys()), index=0)
+    # key esplicita: mantiene stabile l'identita' del widget (nessuna
+    # ricreazione/ reset del menu quando si cambia schermata).
+    mese = st.selectbox("Seleziona Mese", list(MESI_DICT.keys()), index=4, key="report_mese")
+    cliente_selezionato = st.selectbox("Seleziona Cliente", ["Tutti i clienti"] + list(st.session_state.clienti_dict.keys()), index=0, key="report_cliente")
     st.markdown('<div class="card">🛠️ **Opzioni di Calcolo Fiscale**', unsafe_allow_html=True)
     c_iva1, c_iva2 = st.columns(2)
     with c_iva1: 
