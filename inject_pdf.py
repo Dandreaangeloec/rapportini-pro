@@ -23,17 +23,15 @@ def genera_pdf(dati, mese_sel, cliente_sel, imponibile, flag_iva, perc_iva, flag
     if cliente_sel != "Tutti i clienti": titolo_report += f" ({cliente_sel.upper()})"
     pdf.cell(190, 10, txt=clean_txt(titolo_report), ln=True, align="C"); pdf.ln(5)
     pdf.set_font("Arial", "B", 9); pdf.set_fill_color(241, 245, 249)
-    headers = [("Data", 22), ("Cliente", 38), ("Cantiere", 35), ("Ore", 14), ("Tar. Ora", 18), ("Km", 12), ("Tar. Km", 18), ("Spese", 15), ("Totale", 18)]
+    headers = [("Data", 22), ("Cliente", 38), ("Cantiere", 73), ("Ore", 14), ("Km", 12), ("Spese", 15), ("Totale", 18)]
     for h, w in headers: pdf.cell(w, 8, h, 1, 0, "C", True)
     pdf.ln(8); pdf.set_font("Arial", "", 8)
     for r in dati:
         pdf.cell(22, 8, clean_txt(r["Data"]), 1, 0, "C")
         pdf.cell(38, 8, clean_txt(r["Cliente"])[:22], 1, 0, "L")
-        pdf.cell(35, 8, clean_txt(r["Cantiere"])[:20], 1, 0, "L")
+        pdf.cell(73, 8, clean_txt(r["Cantiere"])[:43], 1, 0, "L")
         pdf.cell(14, 8, clean_txt(r["Ore"]), 1, 0, "C")
-        pdf.cell(18, 8, clean_txt(r["Tariffa/h"]), 1, 0, "C")
         pdf.cell(12, 8, clean_txt(r["Km"]), 1, 0, "C")
-        pdf.cell(18, 8, clean_txt(r["Tariffa/Km"]), 1, 0, "C")
         pdf.cell(15, 8, clean_txt(r["Spese Extra"]), 1, 0, "C")
         pdf.cell(18, 8, clean_txt(r["Totale Lordo"]), 1, 1, "R")
     pdf.ln(4); pdf.set_font("Arial", "", 10); pdf.cell(125, 7, "", 0, 0)
